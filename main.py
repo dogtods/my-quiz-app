@@ -684,6 +684,13 @@ def quiz_mode(data: list[dict]):
 
     # 回答済みなら結果表示
     if st.session_state.quiz_answered:
+        # 画面トップへスクロール
+        if JS_EVAL_AVAILABLE:
+            streamlit_js_eval(
+                js_expressions="parent.window.scrollTo(0, 0)",
+                key=f"scroll_top_{st.session_state.get('_ls_counter', 0)}"
+            )
+
         # 1. 正解/不正解
         if st.session_state.quiz_correct:
             st.markdown(
