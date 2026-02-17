@@ -287,9 +287,16 @@ def load_data_by_url(url: str) -> list[dict]:
         for row in rows:
             if len(row) >= 2 and row[0].strip() and row[1].strip():
                 item = {"front": row[0].strip(), "back": row[1].strip()}
+                
+                # 3～5列目は「誤答の選択肢」として扱う
                 wrong_choices = [c.strip() for c in row[2:5] if len(row) > 2 and c.strip()]
                 if wrong_choices:
                     item["wrong_choices"] = wrong_choices
+                
+                # 6列目があれば「解説」として扱う
+                if len(row) >= 6 and row[5].strip():
+                    item["explanation"] = row[5].strip()
+
                 data.append(item)
 
         if data and data[0]["front"].lower() in ("表", "front", "おもて", "question"):
@@ -693,6 +700,10 @@ def quiz_mode(data: list[dict]):
                 f'<div class="wrong-answer">❌ 不正解… 正解は「{q["back"]}」</div>',
                 unsafe_allow_html=True,
             )
+
+        # 解説があれば表示
+        if "explanation" in q and q["explanation"]:
+            st.info(f"💡 解説: {q['explanation']}")
 
         if st.button("▶️ 次の問題", key="next_q", use_container_width=True):
             generate_quiz(data)
