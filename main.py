@@ -395,7 +395,7 @@ def flashcard_mode(data: list[dict]):
             cursor: pointer;
             box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         ">
-            <h1 style="color: {text_color}; margin: 0;">{card_content}</h1>
+            <div style="color: {text_color}; margin: 0; font-size: clamp(1.5rem, 5vw, 2.5rem); font-weight: bold;">{card_content}</div>
         </div>
         """,
         unsafe_allow_html=True
@@ -683,7 +683,7 @@ def quiz_mode(data: list[dict]):
     st.markdown(
         f'<div class="{status_class}" style="text-align:center; padding:24px; '
         f'border-radius:16px; margin:16px 0;">'
-        f'<span style="font-size:2rem; font-weight:700;">{q["front"]}</span>'
+        f'<span style="font-size: clamp(1.2rem, 4vw, 2rem); font-weight:700;">{q["front"]}</span>'
         f'</div>',
         unsafe_allow_html=True,
     )
