@@ -651,19 +651,6 @@ def quiz_mode(data: list[dict]):
     st.markdown("### 🎯 4択クイズ")
     st.caption("表示された言葉の意味を4つの選択肢から選んでください。")
 
-    # スコア表示
-    total = st.session_state.quiz_total
-    score = st.session_state.quiz_score
-    if total > 0:
-        rate = int(score / total * 100)
-        st.markdown(
-            f'<div class="score-card">'
-            f'<h2>{score} / {total}</h2>'
-            f'<p>正答率 {rate}%</p>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-
     # 問題がなければ生成
     if st.session_state.quiz_question is None:
         generate_quiz(data)
@@ -680,16 +667,32 @@ def quiz_mode(data: list[dict]):
     elif word_status == "wrong":
         status_class = "history-wrong"
 
-    st.markdown(
-        f'<div class="{status_class}" style="text-align:center; padding:24px; '
-        f'border-radius:16px; margin:16px 0;">'
-        f'<span style="font-size: clamp(1.2rem, 4vw, 2rem); font-weight:700;">{q["front"]}</span>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
+    # 未回答時のみ、上部にスコアと問題を表示
+    if not st.session_state.quiz_answered:
+        # スコア表示
+        total = st.session_state.quiz_total
+        score = st.session_state.quiz_score
+        if total > 0:
+            rate = int(score / total * 100)
+            st.markdown(
+                f'<div class="score-card">'
+                f'<h2>{score} / {total}</h2>'
+                f'<p>正答率 {rate}%</p>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+        st.markdown(
+            f'<div class="{status_class}" style="text-align:center; padding:24px; '
+            f'border-radius:16px; margin:16px 0;">'
+            f'<span style="font-size: clamp(1.2rem, 4vw, 2rem); font-weight:700;">{q["front"]}</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
     # 回答済みなら結果表示
     if st.session_state.quiz_answered:
+        # 1. 正解/不正解
         if st.session_state.quiz_correct:
             st.markdown(
                 f'<div class="correct-answer">⭕ 正解！ — {q["back"]}</div>',
@@ -701,13 +704,34 @@ def quiz_mode(data: list[dict]):
                 unsafe_allow_html=True,
             )
 
-        # 解説があれば表示
+        # 2. 解説があれば表示
         if "explanation" in q and q["explanation"]:
             st.info(f"💡 解説: {q['explanation']}")
 
+        # 3. 次へボタン
         if st.button("▶️ 次の問題", key="next_q", use_container_width=True):
             generate_quiz(data)
             st.rerun()
+
+        # 4. 問題文 (再掲)
+        st.markdown(
+            f'<div class="{status_class}" style="text-align:center; padding:24px; '
+            f'border-radius:16px; margin:16px 0;">'
+            f'<span style="font-size: clamp(1.2rem, 4vw, 2rem); font-weight:700;">{q["front"]}</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+        # 5. スコア (再掲)
+        if total > 0:
+            rate = int(score / total * 100)
+            st.markdown(
+                f'<div class="score-card">'
+                f'<h2>{score} / {total}</h2>'
+                f'<p>正答率 {rate}%</p>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
         return
 
     # 選択肢ボタン
