@@ -975,7 +975,8 @@ def main():
         # 2. [decks] セクションがあれば追加
         if "decks" in st.secrets:
             for name, info in st.secrets["decks"].items():
-                if isinstance(info, dict) and "url" in info:
+                # 辞書ライクならOK（isinstance(dict)だとAttrDictで弾かれる可能性があるため）
+                if "url" in info:
                     deck_options[name] = info["url"]
         
         # 3. URL直接入力オプションを追加
