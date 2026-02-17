@@ -986,7 +986,7 @@ def main():
         deck_options["🔗 URL直接入力"] = "DIRECT_INPUT"
 
         # デッキ選択メニュー
-        selected_deck_name = st.selectbox("問題集 (デッキ)", options_keys, index=0)
+        selected_deck_name = st.selectbox("問題集 (デッキ)", options_keys, key="deck_selector")
         
         if selected_deck_name == "🔗 URL直接入力":
             selected_deck_url = st.text_input("スプレッドシートのURLを入力してください")
@@ -994,6 +994,7 @@ def main():
             selected_deck_url = deck_options[selected_deck_name]
         
         # DEBUG: デッキ読み込み状況を確認
+        st.write("Debug: options_keys", options_keys)
         st.write("Debug: deck_options", deck_options)
         st.write("Debug: secrets.decks", st.secrets.get("decks", "Not Found"))
 
