@@ -991,6 +991,10 @@ def main():
             selected_deck_url = st.text_input("スプレッドシートのURLを入力してください")
         else:
             selected_deck_url = deck_options[selected_deck_name]
+        
+        # DEBUG: デッキ読み込み状況を確認
+        st.write("Debug: deck_options", deck_options)
+        st.write("Debug: secrets.decks", st.secrets.get("decks", "Not Found"))
 
         mode = st.radio("学習モード", ["4択クイズ", "フラッシュカード", "マッチングゲーム", "学習履歴"])
         
