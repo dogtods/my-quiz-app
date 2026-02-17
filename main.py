@@ -667,20 +667,12 @@ def quiz_mode(data: list[dict]):
     elif word_status == "wrong":
         status_class = "history-wrong"
 
-    # 未回答時のみ、上部にスコアと問題を表示
+    # スコア計算 (表示は回答後のみ)
+    total = st.session_state.quiz_total
+    score = st.session_state.quiz_score
+
+    # 未回答時のみ、上部に問題を表示（スコアは表示しない）
     if not st.session_state.quiz_answered:
-        # スコア表示
-        total = st.session_state.quiz_total
-        score = st.session_state.quiz_score
-        if total > 0:
-            rate = int(score / total * 100)
-            st.markdown(
-                f'<div class="score-card">'
-                f'<h2>{score} / {total}</h2>'
-                f'<p>正答率 {rate}%</p>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
 
         st.markdown(
             f'<div class="{status_class}" style="text-align:center; padding:24px; '
