@@ -906,7 +906,7 @@ def quiz_mode(data: list[dict]):
         st.markdown(
             f'<div class="{status_class}" style="text-align:center; padding:24px; '
             f'border-radius:16px; margin:16px 0;">'
-            f'<span style="font-size: clamp(1.2rem, 4vw, 2rem); font-weight:700;">{q["front"]}</span>'
+            f'<span style="font-size: clamp(1.2rem, 4vw, 2rem); font-weight:700; color: black;">{q["front"]}</span>'
             f'</div>',
             unsafe_allow_html=True,
         )
@@ -941,22 +941,31 @@ def quiz_mode(data: list[dict]):
             generate_quiz(data)
             st.rerun()
 
-        # 4. 問題文 (再掲)
+        # 4. 問題文 (再掲) - 黒文字に変更
         st.markdown(
             f'<div class="{status_class}" style="text-align:center; padding:24px; '
             f'border-radius:16px; margin:16px 0;">'
-            f'<span style="font-size: clamp(1.2rem, 4vw, 2rem); font-weight:700;">{q["front"]}</span>'
+            f'<span style="font-size: clamp(1.2rem, 4vw, 2rem); font-weight:700; color: black;">{q["front"]}</span>'
             f'</div>',
             unsafe_allow_html=True,
         )
+        
+        # 4.5 選択肢の再表示（確認用）
+        st.caption("選択肢:")
+        for opt in st.session_state.quiz_options:
+            if opt == q["back"]:
+                st.info(f"⭕ {opt}")
+            elif opt == st.session_state.get("quiz_selected_option"): # 選択した誤答（もし保存していれば）
+                st.error(f"❌ {opt}")
+            else:
+                st.text(f"・ {opt}")
 
-        # 5. スコア (再掲)
+        # 5. スコア (再掲) - 小さめに変更
         if total > 0:
             rate = int(score / total * 100)
             st.markdown(
-                f'<div class="score-card">'
-                f'<h2>{score} / {total}</h2>'
-                f'<p>正答率 {rate}%</p>'
+                f'<div style="text-align:center; margin:16px 0; padding:12px; background:#f0f2f6; border-radius:12px;">'
+                f'<h4 style="margin:0;">スコア: {score} / {total} (正答率 {rate}%)</h4>'
                 f'</div>',
                 unsafe_allow_html=True,
             )
@@ -964,18 +973,6 @@ def quiz_mode(data: list[dict]):
 
         return
     
-    # 中断して保存ボタン
-    if st.button("💾 中断して保存 (Save & Quit)", key="quiz_save_quit", use_container_width=True):
-        flush_history_to_sheets()
-        st.session_state.quiz_finished = False
-        st.session_state.quiz_total = 0
-        st.session_state.quiz_score = 0
-        st.session_state.quiz_pool = None
-        st.session_state.quiz_question = None
-        st.success("学習内容を保存しました。最初の画面に戻ります。")
-        time.sleep(1)
-        st.rerun()
-
     # 選択肢ボタン
     for i, option in enumerate(st.session_state.quiz_options):
         col_class = "quiz-option"
@@ -991,6 +988,19 @@ def quiz_mode(data: list[dict]):
             st.session_state._ls_counter += 1
             st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
+    
+    st.divider()
+    # 中断して保存ボタン
+    if st.button("💾 中断して保存 (Save & Quit)", key="quiz_save_quit", use_container_width=True):
+        flush_history_to_sheets()
+        st.session_state.quiz_finished = False
+        st.session_state.quiz_total = 0
+        st.session_state.quiz_score = 0
+        st.session_state.quiz_pool = None
+        st.session_state.quiz_question = None
+        st.success("学習内容を保存しました。最初の画面に戻ります。")
+        time.sleep(1)
+        st.rerun()
 
 
 # ===================================================================
@@ -1244,7 +1254,7 @@ def history_panel():
                 pass
         st.markdown(
             f'<div class="{css_class}">'
-            f'{icon} <b>{rec["word"]}</b>'
+            f'{icon} <b style="color:black;">{rec["word"]}</b>'
             f'<span style="float:right; opacity:1; font-weight:600; color:#333; font-size:0.9rem;">{ts}</span>'
             f'</div>',
             unsafe_allow_html=True,
