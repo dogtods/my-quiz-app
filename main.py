@@ -113,8 +113,8 @@ div.stButton > button:active {
 
 /* ---------- 正解/不正解 ---------- */
 .correct-answer {
-    background: linear-gradient(135deg, #00c851 0%, #007e33 100%);
-    color: white;
+    background: #e3f2fd; /* 薄い青 */
+    color: #333333;
     padding: 20px;
     border-radius: 16px;
     text-align: center;
@@ -125,8 +125,8 @@ div.stButton > button:active {
     animation: popIn 0.3s ease;
 }
 .wrong-answer {
-    background: linear-gradient(135deg, #ff4444 0%, #cc0000 100%);
-    color: white;
+    background: #ffebee; /* 薄い赤 */
+    color: #333333;
     padding: 20px;
     border-radius: 16px;
     text-align: center;
@@ -169,22 +169,22 @@ div.stButton > button:active {
     min-height: 72px;
 }
 .match-card-hidden {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white;
+    background: linear-gradient(135deg, #a1c4fd 0%, #c2e9fb 100%); /* 薄い青紫グラデーション */
+    color: #333333;
 }
 .match-card-hidden:hover {
     transform: scale(1.05);
     box-shadow: 0 4px 16px rgba(102,126,234,0.4);
 }
 .match-card-revealed {
-    background: linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%);
-    color: #333;
+    background: linear-gradient(135deg, #fdfbf7 0%, #fff1eb 100%); /* ほぼ白に近い肌色 */
+    color: #333333;
     border: 2px solid #f093fb;
 }
 .match-card-matched {
-    background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
-    color: #555;
-    opacity: 0.8;
+    background: #e0e0e0; /* シンプルなグレー */
+    color: #777;
+    opacity: 0.7;
     pointer-events: none;
 }
 .match-card-invisible {
@@ -822,11 +822,23 @@ def quiz_mode(data: list[dict]):
 # ===================================================================
 def init_matching_game(data: list[dict], num_pairs: int = 8):
     """マッチングゲームを初期化する。"""
-    if len(data) < num_pairs:
-        st.error(f"マッチングゲームには{num_pairs}件以上のデータが必要です。")
-        return
+    st.session_state.match_cleared_pairs = st.session_state.get("match_cleared_pairs", set())
+    
+    # 候補データの抽出（習熟度フィルタ済みデータから、さらにクリア済みを除外）
+    available_data = [d for d in data if d['front'] not in st.session_state.match_cleared_pairs]
+    
+    if len(available_data) < num_pairs:
+        # 足りない場合
+        if len(data) >= num_pairs:
+            # 元データなら足りる -> リセット提案
+            st.warning(f"未クリアのペアが足りません（残り{len(available_data)}ペア）。リセットしてください。")
+            return
+        else:
+            # 元データ自体が足りない
+            st.error(f"マッチングゲームには{num_pairs}件以上のデータが必要です。")
+            return
 
-    pairs = random.sample(data, num_pairs)
+    pairs = random.sample(available_data, num_pairs)
     cards = []
     for p in pairs:
         cards.append({"id": f"f_{p['front']}", "text": p["front"], "pair_key": p["front"], "side": "front"})
@@ -850,11 +862,19 @@ def matching_game(data: list[dict], num_pairs: int = 8):
     total_cards = num_pairs * 2
     st.caption(f"表と裏のペアを見つけてください。{num_pairs}組{total_cards}枚のカードをめくります。")
 
-    # 初期化ボタン
+    # 初期化ボタンエリア
     col_a, col_b = st.columns(2)
     with col_a:
         if st.button("🔄 新しいゲーム", key="new_match", use_container_width=True):
             init_matching_game(data, num_pairs)
+            st.rerun()
+    with col_b:
+        # 重複リセットボタン
+        cleared_count = len(st.session_state.get("match_cleared_pairs", set()))
+        if st.button(f"🗑️ 重複履歴リセット ({cleared_count})", key="reset_match_history", use_container_width=True, help="このセッションでクリアしたペアの除外を解除します"):
+            st.session_state.match_cleared_pairs = set()
+            st.success("重複防止履歴をリセットしました")
+            time.sleep(0.5)
             st.rerun()
 
     # カード枚数が変わった場合などの再初期化チェック
@@ -879,7 +899,6 @@ def matching_game(data: list[dict], num_pairs: int = 8):
             f'（{st.session_state.match_attempts}回）</div>',
             unsafe_allow_html=True,
         )
-        # カレンダー登録ボタン
         if st.button("📅 カレンダーに記録", key="cal_match", use_container_width=True):
             ok = register_to_calendar(
                 summary="📚 学習完了（マッチングゲーム）",
@@ -887,7 +906,36 @@ def matching_game(data: list[dict], num_pairs: int = 8):
             )
             if ok:
                 st.success("カレンダーに登録しました！")
-        return
+        
+        # 完了メッセージと次へボタン
+        st.markdown(
+            f"""
+            <div style="
+                background-color: #e3f2fd; 
+                color: #333; 
+                padding: 1rem; 
+                border-radius: 10px; 
+                text-align: center; 
+                margin-bottom: 1rem; 
+                border: 2px solid #2196F3;
+            ">
+                <h3 style="margin:0; color:#1565C0;">🎉 クリア！おめでとうございます！</h3>
+                <p style="margin:0.5rem 0 0 0; font-weight:bold;">タイム: {elapsed:.1f}秒 / 試行: {st.session_state.match_attempts}回</p>
+            </div>
+            """, 
+            unsafe_allow_html=True
+        )
+        
+        # 次へボタン
+        if st.button("➡️ 次のゲームへ", key="next_match_btn", type="primary", use_container_width=True):
+            # 今回クリアしたペアを記録
+            current_pairs = {card['pair_key'] for card in st.session_state.match_cards}
+            st.session_state.match_cleared_pairs = st.session_state.get("match_cleared_pairs", set()) | current_pairs
+            
+            # 再初期化
+            init_matching_game(data, num_pairs)
+            st.rerun()
+
     else:
         if st.session_state.match_start_time:
             elapsed = time.time() - st.session_state.match_start_time
