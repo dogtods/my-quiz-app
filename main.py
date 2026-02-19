@@ -58,10 +58,26 @@ html, body, [class*="st-"] {
 }
 
 section[data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+    background-color: #f8f9fa;
+    border-right: 1px solid #ddd;
 }
 section[data-testid="stSidebar"] * {
-    color: #e0e0e0 !important;
+    color: #333333 !important;
+}
+section[data-testid="stSidebar"] input, 
+section[data-testid="stSidebar"] select, 
+section[data-testid="stSidebar"] div[data-baseweb="select"] span {
+    color: #333333 !important;
+}
+
+/* サイドバー開閉ボタンにテキストを追加 */
+button[kind="header"]::after {
+    content: "設定表示";
+    color: #ffffff;
+    font-size: 0.8rem;
+    font-weight: bold;
+    margin-left: 8px;
+    vertical-align: middle;
 }
 
 /* ---------- ボタン共通 ---------- */
@@ -168,7 +184,7 @@ div.stButton > button:active {
 .match-card-matched {
     background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
     color: #555;
-    opacity: 0.5;
+    opacity: 0.8;
     pointer-events: none;
 }
 .match-card-invisible {
@@ -205,10 +221,10 @@ div.stButton > button:active {
     margin: 0;
     font-size: 2.5rem;
 }
-.score-card p {
     margin: 4px 0 0;
-    font-size: 1rem;
-    opacity: 0.9;
+    font-size: 1.1rem;
+    font-weight: 600;
+    opacity: 1;
 }
 
 /* ---------- ヘッダー ---------- */
@@ -227,8 +243,9 @@ div.stButton > button:active {
 }
 .app-header p {
     margin: 4px 0 0;
-    opacity: 0.85;
-    font-size: 0.95rem;
+    opacity: 1;
+    font-size: 1rem;
+    font-weight: 600;
 }
 
 /* ---------- タイマー ---------- */
@@ -564,6 +581,56 @@ def init_session_state():
 init_session_state()
 
 
+def filter_and_slice_data(data: list[dict], limit_str: str, filter_mastered: bool) -> list[dict]:
+    """設定に基づいてデータをフィルタリングおよびスライスする。"""
+    if not data:
+        return []
+
+    # 1. 習熟度フィルター
+    filtered = list(data)
+    if filter_mastered:
+        # 正解履歴があるものを除外（get_word_statusが 'correct' のもの）
+        filtered = [d for d in filtered if get_word_status(d["front"]) != "correct"]
+    
+    # 2. ランダムシャッフル & スライス
+    # セッション内で一貫性を保つため、session_state にキャッシュする
+    
+    # 現在の設定状況を表すキー
+    current_key = f"{st.session_state.get('current_deck_url')}_{limit_str}_{filter_mastered}_length{len(data)}"
+    
+    # キャッシュがない、またはキーが変わった場合は再生成
+    if "session_data_cache" not in st.session_state or st.session_state.get("session_cache_key") != current_key:
+        # シャッフル
+        random.shuffle(filtered)
+        
+        # スライス
+        if limit_str != "すべて":
+            try:
+                limit = int(limit_str.replace("問", ""))
+                filtered = filtered[:limit]
+            except ValueError:
+                pass
+        
+        st.session_state.session_data_cache = filtered
+        st.session_state.session_cache_key = current_key
+        
+        # クイズ・フラッシュカードの状態もリセット（データが変わったため）
+        st.session_state.quiz_pool = None
+        st.session_state.quiz_question = None
+        st.session_state.quiz_finished = False
+        st.session_state.quiz_total = 0
+        st.session_state.quiz_score = 0
+        
+        st.session_state.fc_index = 0
+        st.session_state.fc_flipped = False
+        st.session_state.fc_order = []
+        
+        st.session_state.match_finished = False
+        st.session_state.match_cards = []
+
+    return st.session_state.session_data_cache
+
+
 # ===================================================================
 # 4択クイズモード
 # ===================================================================
@@ -621,7 +688,7 @@ def quiz_mode(data: list[dict]):
             '<div style="text-align:center; padding:40px 20px;">'
             '<h1 style="font-size:3rem;">🎉</h1>'
             '<h2>お疲れ様でした！全問終了です</h2>'
-            '<p style="font-size:1.2rem; color:#666; margin-bottom:30px;">スプレッドシートにある全ての問題を学習しました。</p>'
+            '<p style="font-size:1.2rem; color:#333; font-weight:600; margin-bottom:30px;">スプレッドシートにある全ての問題を学習しました。</p>'
             '</div>',
             unsafe_allow_html=True,
         )
@@ -753,13 +820,13 @@ def quiz_mode(data: list[dict]):
 # ===================================================================
 # マッチングゲーム（神経衰弱）
 # ===================================================================
-def init_matching_game(data: list[dict]):
+def init_matching_game(data: list[dict], num_pairs: int = 8):
     """マッチングゲームを初期化する。"""
-    if len(data) < 8:
-        st.error("マッチングゲームには8件以上のデータが必要です。")
+    if len(data) < num_pairs:
+        st.error(f"マッチングゲームには{num_pairs}件以上のデータが必要です。")
         return
 
-    pairs = random.sample(data, 8)
+    pairs = random.sample(data, num_pairs)
     cards = []
     for p in pairs:
         cards.append({"id": f"f_{p['front']}", "text": p["front"], "pair_key": p["front"], "side": "front"})
@@ -768,7 +835,7 @@ def init_matching_game(data: list[dict]):
     random.shuffle(cards)
 
     st.session_state.match_cards = cards
-    st.session_state.match_revealed = [False] * 16
+    st.session_state.match_revealed = [False] * (num_pairs * 2)
     st.session_state.match_matched = set()
     st.session_state.match_first = None
     st.session_state.match_start_time = time.time()
@@ -777,20 +844,22 @@ def init_matching_game(data: list[dict]):
     st.session_state.match_attempts = 0
 
 
-def matching_game(data: list[dict]):
+def matching_game(data: list[dict], num_pairs: int = 8):
     """マッチングゲーム（神経衰弱）の表示・ロジック。"""
     st.markdown("### 🧩 マッチングゲーム")
-    st.caption("表と裏のペアを見つけてください。8組16枚のカードをめくります。")
+    total_cards = num_pairs * 2
+    st.caption(f"表と裏のペアを見つけてください。{num_pairs}組{total_cards}枚のカードをめくります。")
 
     # 初期化ボタン
     col_a, col_b = st.columns(2)
     with col_a:
         if st.button("🔄 新しいゲーム", key="new_match", use_container_width=True):
-            init_matching_game(data)
+            init_matching_game(data, num_pairs)
             st.rerun()
 
-    if not st.session_state.match_cards:
-        init_matching_game(data)
+    # カード枚数が変わった場合などの再初期化チェック
+    if not st.session_state.match_cards or len(st.session_state.match_cards) != total_cards:
+        init_matching_game(data, num_pairs)
         st.rerun()
 
     cards = st.session_state.match_cards
@@ -798,7 +867,7 @@ def matching_game(data: list[dict]):
     matched = st.session_state.match_matched
 
     # ゲーム完了チェック
-    if len(matched) == 16 and not st.session_state.match_finished:
+    if len(matched) == total_cards and not st.session_state.match_finished:
         st.session_state.match_finished = True
         st.session_state.match_elapsed = time.time() - st.session_state.match_start_time
 
@@ -828,11 +897,30 @@ def matching_game(data: list[dict]):
                     unsafe_allow_html=True,
                 )
 
-    # 4×4 グリッド描画
-    for row in range(4):
-        cols = st.columns(4, gap="small")
-        for col_idx in range(4):
-            idx = row * 4 + col_idx
+    # グリッド描画 (レスポンシブな列数計算)
+    # 6枚(3ペア) -> 3列x2行
+    # 8枚(4ペア) -> 4列x2行
+    # 12枚(6ペア) -> 4列x3行 (or 3x4)
+    # 16枚(8ペア) -> 4列x4行
+    
+    if num_pairs == 3:
+        cols_count = 3
+    elif num_pairs == 4:
+        cols_count = 4 # 2行
+    elif num_pairs == 6:
+        cols_count = 3 # 4行 (スマホだと3列が良い)
+    else: # 8ペア
+        cols_count = 4
+
+    rows_count = (total_cards + cols_count - 1) // cols_count
+    
+    for row in range(rows_count):
+        cols = st.columns(cols_count, gap="small")
+        for col_idx in range(cols_count):
+            idx = row * cols_count + col_idx
+            if idx >= len(cards):
+                break
+                
             card = cards[idx]
             with cols[col_idx]:
                 if idx in matched:
@@ -933,7 +1021,7 @@ def history_panel():
         st.markdown(
             f'<div class="{css_class}">'
             f'{icon} <b>{rec["word"]}</b>'
-            f'<span style="float:right; opacity:0.6; font-size:0.85rem;">{ts}</span>'
+            f'<span style="float:right; opacity:1; font-weight:600; color:#333; font-size:0.9rem;">{ts}</span>'
             f'</div>',
             unsafe_allow_html=True,
         )
@@ -993,12 +1081,36 @@ def main():
         else:
             selected_deck_url = deck_options[selected_deck_name]
         
-        # DEBUG: デッキ読み込み状況を確認
-        st.write("Debug: options_keys", options_keys)
-        st.write("Debug: deck_options", deck_options)
-        st.write("Debug: secrets.decks", st.secrets.get("decks", "Not Found"))
+        
+        # DEBUG: デッキ読み込み状況を確認 (不要になったためコメントアウト)
+        # with st.expander("Debug Info (Deck Config)"):
+        #     st.write("options_keys", options_keys)
+        #     st.write("deck_options", deck_options)
+        #     st.write("secrets.decks", st.secrets.get("decks", "Not Found"))
 
         mode = st.radio("学習モード", ["4択クイズ", "フラッシュカード", "マッチングゲーム", "学習履歴"])
+        
+        st.divider()
+        st.caption("セッション設定")
+        
+        # 出題数の制限
+        limit_options = ["すべて", "10問", "20問", "30問"]
+        selected_limit = st.radio("1回の出題数", limit_options, index=1, horizontal=True)
+        
+        # 習熟度フィルター
+        filter_mastered = st.checkbox("覚えた（正解した）問題を除外", value=False)
+        
+        # マッチングゲーム設定（モードがマッチングの時のみ表示、または常時表示）
+        # ここではシンプルに常時表示し、モード切り替え時に適用されるようにする
+        match_pairs = 8
+        if mode == "マッチングゲーム":
+            st.caption("マッチングゲーム設定")
+            match_pairs = st.select_slider(
+                "カードの枚数（ペア数）",
+                options=[3, 4, 6, 8],
+                value=8,
+                format_func=lambda x: f"{x * 2}枚 ({x}ペア)"
+            )
         
         st.divider()
         st.caption("設定")
@@ -1013,32 +1125,25 @@ def main():
                 st.session_state._ls_counter += 1
                 st.success("履歴を削除しました")
 
-    # デッキ変更チェック & 状態リセット
-    if "current_deck_url" not in st.session_state:
-        st.session_state.current_deck_url = selected_deck_url
-    
-    if st.session_state.current_deck_url != selected_deck_url:
-        # デッキが変わったので各種状態をリセット
-        st.session_state.current_deck_url = selected_deck_url
-        
-        # クイズ
+    # デッキ変更または設定変更検知
+    current_settings = f"{selected_deck_url}_{selected_limit}_{filter_mastered}_{match_pairs}"
+    if st.session_state.get("current_settings") != current_settings:
+        st.session_state.current_settings = current_settings
         st.session_state.quiz_pool = None
         st.session_state.quiz_question = None
         st.session_state.quiz_finished = False
         st.session_state.quiz_total = 0
         st.session_state.quiz_score = 0
         
-        # フラッシュカード
         st.session_state.fc_index = 0
         st.session_state.fc_flipped = False
-        if "fc_order" in st.session_state:
-            del st.session_state.fc_order
-            
-        # マッチング
-        st.session_state.match_cards = []
-        st.session_state.match_finished = False
+        st.session_state.fc_order = []
         
-        st.rerun()
+        st.session_state.match_finished = False
+        st.session_state.match_cards = []
+        # session_data_cache もリセット（filter_and_slice_data内で再生成される）
+        if "session_cache_key" in st.session_state:
+            del st.session_state.session_cache_key
 
     # データ読み込み
     data = load_data(selected_deck_url)
@@ -1046,13 +1151,28 @@ def main():
         st.error("データを読み込めませんでした。")
         return
 
+    # データをフィルタリング & スライス
+    filtered_data = filter_and_slice_data(data, selected_limit, filter_mastered)
+
+    if not filtered_data:
+        st.warning("条件に一致する問題がありません（全て正解済み、またはデータ自体が空です）。")
+        if filter_mastered:
+            st.info("「覚えた問題を除外」のチェックを外すと、復習ができます。")
+        return
+
     # モード分岐
     if mode == "4択クイズ":
-        quiz_mode(data)
+        quiz_mode(filtered_data)
     elif mode == "フラッシュカード":
-        flashcard_mode(data)
+        flashcard_mode(filtered_data)
     elif mode == "マッチングゲーム":
-        matching_game(data)
+        # マッチングは全データからランダムの方がゲームとして成立しやすいが、
+        # 要望に合わせてフィルタ済みデータを使う（数が少なすぎる場合は警告などが必要かも）
+        # -> 指定ペア数以上のデータが必要
+        if len(filtered_data) < match_pairs:
+             st.warning(f"マッチングゲーム（{match_pairs}ペア）には少なくとも{match_pairs}件のデータが必要です。フィルタ条件を緩和してください。")
+        else:
+             matching_game(filtered_data, match_pairs)
     elif mode == "学習履歴":
         history_panel()
 
