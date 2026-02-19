@@ -11,6 +11,7 @@ import streamlit as st
 import random
 import json
 import time
+import urllib.parse
 from datetime import datetime, timezone, timedelta
 
 # ---------------------------------------------------------------------------
@@ -623,40 +624,26 @@ def get_word_status(word: str) -> str | None:
 # ===================================================================
 # Googleカレンダー連携
 # ===================================================================
-def register_to_calendar(summary: str, description: str = ""):
-    """学習完了をGoogleカレンダーに登録する。"""
-    if not GCAL_AVAILABLE:
-        st.warning("Google Calendar APIライブラリがインストールされていません。")
-        return False
-
-    try:
-        scopes = ["https://www.googleapis.com/auth/calendar.events"]
-        creds_dict = dict(st.secrets["gcp_service_account"])
-        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
-        service = build_google_service("calendar", "v3", credentials=creds)
-
-        calendar_id = st.secrets.get("calendar_id", "primary")
-        jst = timezone(timedelta(hours=9))
-        now = datetime.now(jst)
-
-        event = {
-            "summary": summary,
-            "description": description,
-            "start": {
-                "dateTime": now.isoformat(),
-                "timeZone": "Asia/Tokyo",
-            },
-            "end": {
-                "dateTime": (now + timedelta(minutes=30)).isoformat(),
-                "timeZone": "Asia/Tokyo",
-            },
-        }
-
-        service.events().insert(calendarId=calendar_id, body=event).execute()
-        return True
-    except Exception as e:
-        st.error(f"カレンダー登録に失敗しました: {e}")
-        return False
+# ===================================================================
+# Googleカレンダー連携 (Webリンク生成)
+# ===================================================================
+def create_calendar_link(summary: str, description: str = "") -> str:
+    """Googleカレンダーへの登録リンクを生成する。"""
+    jst = timezone(timedelta(hours=9))
+    now = datetime.now(jst)
+    start_time = now.strftime("%Y%m%dT%H%M%S")
+    end_time = (now + timedelta(minutes=30)).strftime("%Y%m%dT%H%M%S")
+    
+    base_url = "https://www.google.com/calendar/render"
+    params = {
+        "action": "TEMPLATE",
+        "text": summary,
+        "details": description,
+        "dates": f"{start_time}/{end_time}",
+        "ctz": "Asia/Tokyo",
+    }
+    query = urllib.parse.urlencode(params)
+    return f"{base_url}?{query}"
 
 
 # ===================================================================
@@ -1265,14 +1252,12 @@ def history_panel():
 
     st.divider()
 
-    # カレンダー登録
-    if st.button("📅 学習セッションをカレンダーに記録", key="cal_hist", use_container_width=True):
-        ok = register_to_calendar(
-            summary="📚 学習完了",
-            description=f"合計{total}問 / 正解{correct}問 / 正答率{rate}%",
-        )
-        if ok:
-            st.success("カレンダーに登録しました！")
+    # カレンダー登録 (リンクボタンに変更)
+    summary = "📚 学習完了"
+    description = f"合計{total}問 / 正解{correct}問 / 正答率{rate}%"
+    link_url = create_calendar_link(summary, description)
+    
+    st.link_button("📅 カレンダーに登録 (Google Calendar)", link_url, use_container_width=True)
 
     # 履歴クリア
     if st.button("🗑️ 履歴をクリア", key="clear_hist", use_container_width=True):
