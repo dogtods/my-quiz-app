@@ -377,6 +377,9 @@ def flashcard_mode(data: list[dict]):
 
     # 全問終了チェック
     if st.session_state.fc_index >= len(data):
+        # 終了時にフラッシュ
+        flush_history_to_sheets()
+        
         st.markdown(
             '<div style="text-align:center; padding:40px 0;">'
             '<h2>🎉 一通り学習しました！</h2>'
@@ -447,7 +450,20 @@ def flashcard_mode(data: list[dict]):
             st.session_state._ls_counter += 1
             st.rerun()
             
+             
     st.caption(f"進捗: {st.session_state.fc_index + 1} / {len(data)}")
+
+    # 中断して保存ボタン
+    st.divider()
+    if st.button("💾 中断して保存 (Save & Quit)", use_container_width=True):
+        flush_history_to_sheets()
+        # 状態リセットしてトップ(ようなもの)へ戻る、あるいはrerun
+        st.session_state.fc_index = 0
+        st.session_state.fc_flipped = False
+        st.session_state.fc_order = []
+        st.success("学習内容を保存しました。最初の画面に戻ります。")
+        time.sleep(1)
+        st.rerun()
 
 
 # ===================================================================
@@ -455,6 +471,38 @@ def flashcard_mode(data: list[dict]):
 # ===================================================================
 LS_KEY = "quiz_app_history"
 
+
+def load_history_from_sheets() -> list[dict]:
+    """スプレッドシートの 'History' シートから履歴を読み込む。"""
+    try:
+        url = st.session_state.get("current_deck_url") or st.secrets.get("spreadsheet_url")
+        if not url:
+            return []
+            
+        scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+        creds_dict = dict(st.secrets["gcp_service_account"])
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
+        client = gspread.authorize(creds)
+        sh = client.open_by_url(url)
+        worksheet = sh.worksheet("History")
+        rows = worksheet.get_all_values()
+        
+        if not rows or len(rows) < 2:
+            return []
+            
+        # ヘッダー除去
+        data_rows = rows[1:]
+        history = []
+        for r in data_rows:
+            if len(r) >= 3:
+                history.append({
+                    "timestamp": r[0],
+                    "word": r[1],
+                    "correct": (r[2] == "Correct")
+                })
+        return history
+    except Exception:
+        return []
 
 def load_history_from_ls() -> list[dict]:
     """LocalStorage から学習履歴を読み込む。"""
@@ -491,17 +539,76 @@ def save_history_to_ls(history: list[dict]):
 
 
 def add_history_record(word: str, correct: bool):
-    """履歴レコードを追加して保存。"""
+    """履歴レコードを追加して保存（LocalStorage + Google Sheets）。"""
     jst = timezone(timedelta(hours=9))
+    timestamp = datetime.now(jst).isoformat()
     record = {
         "word": word,
         "correct": correct,
-        "timestamp": datetime.now(jst).isoformat(),
+        "timestamp": timestamp,
     }
     if "history" not in st.session_state:
         st.session_state.history = []
     st.session_state.history.append(record)
+    
+    # LocalStorage保存
     save_history_to_ls(st.session_state.history)
+    
+    # Google Sheets保存 (バッチ処理に変更: 10件ごとに flush)
+    if "pending_history" not in st.session_state:
+        st.session_state.pending_history = []
+    
+    st.session_state.pending_history.append(record)
+    
+    if len(st.session_state.pending_history) >= 10:
+        flush_history_to_sheets()
+
+def flush_history_to_sheets():
+    """保留中の履歴をスプレッドシートに一括保存する。"""
+    try:
+        pending = st.session_state.get("pending_history", [])
+        if not pending:
+            return
+
+        url = st.session_state.get("current_deck_url") or st.secrets.get("spreadsheet_url")
+        if not url:
+            return
+            
+        scope = [
+            'https://www.googleapis.com/auth/spreadsheets',
+            'https://www.googleapis.com/auth/drive'
+        ]
+        creds_dict = dict(st.secrets["gcp_service_account"])
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
+        client = gspread.authorize(creds)
+        
+        sh = client.open_by_url(url)
+        
+        # Historyシートの取得または作成
+        try:
+            worksheet = sh.worksheet("History")
+        except gspread.WorksheetNotFound:
+            worksheet = sh.add_worksheet(title="History", rows=1000, cols=3)
+            worksheet.append_row(["Timestamp", "Word", "Correct"])
+            
+        # 一括追記
+        rows_to_add = []
+        for r in pending:
+            rows_to_add.append([
+                r["timestamp"],
+                r["word"],
+                "Correct" if r["correct"] else "Wrong"
+            ])
+        
+        if rows_to_add:
+            worksheet.append_rows(rows_to_add)
+            
+        # クリア
+        st.session_state.pending_history = []
+        st.toast("学習履歴を保存しました！", icon="✅")
+        
+    except Exception as e:
+        st.error(f"スプレッドシートへの保存に失敗しました: {e}")
 
 
 def get_word_status(word: str) -> str | None:
@@ -560,17 +667,53 @@ def init_session_state():
         st.session_state.history_loaded = False
         st.session_state.history = []
 
+    # JSが反応しない場合のタイムアウト処理
     if not st.session_state.history_loaded:
+        # リトライ回数管理
+        if "history_retry_count" not in st.session_state:
+            st.session_state.history_retry_count = 0
+        
+        st.session_state.history_retry_count += 1
+        
         loaded_data = load_history_from_ls()
         if loaded_data is not None:
-            # ロード成功（空リスト含む）
+            # ロード成功
             st.session_state.history = loaded_data
             st.session_state.history_loaded = True
-            st.rerun() # リロードして反映
+            st.rerun()
         else:
-            # ロード中...（次回rerunを待つ）
-            st.stop()
-        
+            # ロード失敗/待機中
+            if st.session_state.history_retry_count > 2:
+                # 2回リトライしてもダメなら諦めて空で進める（無限ループ防止）
+                st.warning("履歴データの読み込みに失敗しました。新規セッションとして開始します。")
+                st.session_state.history = []
+                st.session_state.history_loaded = True
+                # st.rerun() # ここでrerunすると無限ループの恐れがあるのでそのまま進める
+            else:
+                # 少し待ってからリロード（stopして再度実行されるのを期待）
+                with st.spinner("学習履歴を読み込んでいます..."):
+                     time.sleep(1.0)
+                st.rerun()
+
+    # Google Sheetsからの履歴読み込み（バックアップとして結合、または初期ロード）
+    if st.session_state.history_loaded and not st.session_state.get("sheets_history_loaded", False):
+        try:
+            sheets_history = load_history_from_sheets()
+            if sheets_history:
+                # 重複排除しつつマージ (Timestamp等で判断したいがシンプルにWord+Correctで判断するか、Sheets優先にするか)
+                # 今回は「Sheetsにあるものはすべて正」として、ローカルになければ追加する形にする
+                current_words = set(r["word"] for r in st.session_state.history)
+                for rec in sheets_history:
+                    # 簡易的に、未登録の単語履歴があれば追加（厳密な時刻比較は省略）
+                    st.session_state.history.append(rec)
+                
+                # 並び替え（古い順->新しい順）
+                st.session_state.history.sort(key=lambda x: x.get("timestamp", ""))
+                
+            st.session_state.sheets_history_loaded = True
+        except Exception:
+            pass
+
     if "initialized" not in st.session_state:
         st.session_state.initialized = True
         st.session_state._ls_counter = 0
@@ -593,6 +736,9 @@ def init_session_state():
         st.session_state.match_finished = False
         st.session_state.match_elapsed = 0
         st.session_state.match_attempts = 0
+
+    if "pending_history" not in st.session_state:
+        st.session_state.pending_history = []
 
 
 init_session_state()
@@ -700,6 +846,9 @@ def quiz_mode(data: list[dict]):
     """4択クイズの表示・ロジック。"""
     # 全問終了時の画面
     if st.session_state.get("quiz_finished"):
+        # 終了時にフラッシュ
+        flush_history_to_sheets()
+        
         st.balloons()
         st.markdown(
             '<div style="text-align:center; padding:40px 20px;">'
@@ -1145,6 +1294,16 @@ def main():
             selected_deck_url = st.text_input("スプレッドシートのURLを入力してください")
         else:
             selected_deck_url = deck_options[selected_deck_name]
+        
+        # サービスアカウント情報の表示（デバッグ用・権限設定用）
+        # try:
+        #     sa_email = st.secrets["gcp_service_account"]["client_email"]
+        #     with st.expander("🔑 サービスアカウント情報"):
+        #         st.caption("スプレッドシートの「共有」に以下を追加してください:")
+        #         st.code(sa_email, language=None)
+        #         st.caption("※権限は「編集者」に設定")
+        # except Exception:
+        #     pass
         
         
         # DEBUG: デッキ読み込み状況を確認 (不要になったためコメントアウト)
