@@ -106,7 +106,13 @@ div.stButton > button:active {
     color: white !important;
     min-height: 64px !important;
     font-size: 1.15rem !important;
-    margin-bottom: 8px;
+    min-height: 64px !important;
+    font-size: 1.15rem !important;
+    margin-bottom: 0px !important;
+}
+/* ボタン全体の上下マージンを少し詰める（スマホ用） */
+.stButton {
+    margin-bottom: -0.5rem;
 }
 .quiz-option button:hover {
     background: linear-gradient(135deg, #764ba2 0%, #667eea 100%) !important;
@@ -905,7 +911,7 @@ def quiz_mode(data: list[dict]):
 
         st.markdown(
             f'<div class="{status_class}" style="text-align:center; padding:24px; '
-            f'border-radius:16px; margin:16px 0;">'
+            f'border-radius:16px; margin:16px 0; background-color: #ffffff;">'
             f'<span style="font-size: clamp(1.2rem, 4vw, 2rem); font-weight:700; color: black;">{q["front"]}</span>'
             f'</div>',
             unsafe_allow_html=True,
@@ -944,7 +950,7 @@ def quiz_mode(data: list[dict]):
         # 4. 問題文 (再掲) - 黒文字に変更
         st.markdown(
             f'<div class="{status_class}" style="text-align:center; padding:24px; '
-            f'border-radius:16px; margin:16px 0;">'
+            f'border-radius:16px; margin:16px 0; background-color: #ffffff;">'
             f'<span style="font-size: clamp(1.2rem, 4vw, 2rem); font-weight:700; color: black;">{q["front"]}</span>'
             f'</div>',
             unsafe_allow_html=True,
@@ -975,8 +981,7 @@ def quiz_mode(data: list[dict]):
     
     # 選択肢ボタン
     for i, option in enumerate(st.session_state.quiz_options):
-        col_class = "quiz-option"
-        st.markdown(f'<div class="{col_class}">', unsafe_allow_html=True)
+        # 4択は gap を狭くする
         if st.button(option, key=f"opt_{i}", use_container_width=True):
             correct = option == q["back"]
             st.session_state.quiz_answered = True
@@ -987,7 +992,6 @@ def quiz_mode(data: list[dict]):
             add_history_record(q["front"], correct)
             st.session_state._ls_counter += 1
             st.rerun()
-        st.markdown("</div>", unsafe_allow_html=True)
     
     st.divider()
     # 中断して保存ボタン
