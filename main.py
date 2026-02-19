@@ -975,6 +975,20 @@ def quiz_mode(data: list[dict]):
             )
         return
 
+        return
+    
+    # 中断して保存ボタン
+    if st.button("💾 中断して保存 (Save & Quit)", key="quiz_save_quit", use_container_width=True):
+        flush_history_to_sheets()
+        st.session_state.quiz_finished = False
+        st.session_state.quiz_total = 0
+        st.session_state.quiz_score = 0
+        st.session_state.quiz_pool = None
+        st.session_state.quiz_question = None
+        st.success("学習内容を保存しました。最初の画面に戻ります。")
+        time.sleep(1)
+        st.rerun()
+
     # 選択肢ボタン
     for i, option in enumerate(st.session_state.quiz_options):
         col_class = "quiz-option"
@@ -1331,7 +1345,7 @@ def main():
         selected_limit = st.radio("1回の出題数", limit_options, index=1, horizontal=True)
         
         # 習熟度フィルター
-        filter_mastered = st.checkbox("覚えた（正解した）問題を除外", value=False)
+        filter_mastered = st.checkbox("覚えた（正解した）問題を除外", value=True)
         
         # マッチングゲーム設定（モードがマッチングの時のみ表示、または常時表示）
         # ここではシンプルに常時表示し、モード切り替え時に適用されるようにする
