@@ -700,12 +700,21 @@ def init_session_state():
         try:
             sheets_history = load_history_from_sheets()
             if sheets_history:
-                # 重複排除しつつマージ (Timestamp等で判断したいがシンプルにWord+Correctで判断するか、Sheets優先にするか)
-                # 今回は「Sheetsにあるものはすべて正」として、ローカルになければ追加する形にする
-                current_words = set(r["word"] for r in st.session_state.history)
+                # 既存の履歴を (timestamp, word) のセットにして重複チェック
+                existing_keys = set()
+                for r in st.session_state.history:
+                     # timestampが無い古いデータへの考慮
+                     ts = r.get("timestamp", "")
+                     wd = r.get("word", "")
+                     existing_keys.add((ts, wd))
+                
                 for rec in sheets_history:
-                    # 簡易的に、未登録の単語履歴があれば追加（厳密な時刻比較は省略）
-                    st.session_state.history.append(rec)
+                    # 重複していなければ追加
+                    ts = rec.get("timestamp", "")
+                    wd = rec.get("word", "")
+                    if (ts, wd) not in existing_keys:
+                        st.session_state.history.append(rec)
+                        existing_keys.add((ts, wd))
                 
                 # 並び替え（古い順->新しい順）
                 st.session_state.history.sort(key=lambda x: x.get("timestamp", ""))
