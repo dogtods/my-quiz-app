@@ -459,7 +459,7 @@ LS_KEY = "quiz_app_history"
 def load_history_from_ls() -> list[dict]:
     """LocalStorage から学習履歴を読み込む。"""
     if not JS_EVAL_AVAILABLE:
-        return []
+        return None  # JSが使えない場合はNoneを返す（ロード未完了扱い）
     try:
         raw = streamlit_js_eval(
             js_expressions=f"localStorage.getItem('{LS_KEY}')",
@@ -467,6 +467,8 @@ def load_history_from_ls() -> list[dict]:
         )
         if raw and isinstance(raw, str):
             return json.loads(raw)
+        if raw is None:
+             return None # まだロードできていない
     except Exception:
         pass
     return []
@@ -554,10 +556,25 @@ def register_to_calendar(summary: str, description: str = ""):
 # セッションステート初期化
 # ===================================================================
 def init_session_state():
+    if "history_loaded" not in st.session_state:
+        st.session_state.history_loaded = False
+        st.session_state.history = []
+
+    if not st.session_state.history_loaded:
+        loaded_data = load_history_from_ls()
+        if loaded_data is not None:
+            # ロード成功（空リスト含む）
+            st.session_state.history = loaded_data
+            st.session_state.history_loaded = True
+            st.rerun() # リロードして反映
+        else:
+            # ロード中...（次回rerunを待つ）
+            st.stop()
+        
     if "initialized" not in st.session_state:
         st.session_state.initialized = True
         st.session_state._ls_counter = 0
-        st.session_state.history = load_history_from_ls()
+
         # クイズ用
         st.session_state.quiz_question = None
         st.session_state.quiz_options = []
