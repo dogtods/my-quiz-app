@@ -321,6 +321,10 @@ def load_data_by_url(url: str) -> list[dict]:
                 if len(row) >= 6 and row[5].strip():
                     item["explanation"] = row[5].strip()
 
+                # 7列目があれば「メモ/参考URL」として扱う
+                if len(row) >= 7 and row[6].strip():
+                    item["notes"] = row[6].strip()
+
                 data.append(item)
 
         if data and data[0]["front"].lower() in ("表", "front", "おもて", "question"):
@@ -616,6 +620,56 @@ def flush_history_to_sheets():
         
     except Exception as e:
         st.error(f"スプレッドシートへの保存に失敗しました: {e}")
+
+
+def save_notes_to_sheet(front: str, notes: str):
+    """7列目（メモ/参考URL）をスプレッドシートに保存する。"""
+    try:
+        url = st.session_state.get("current_deck_url") or st.secrets.get("spreadsheet_url")
+        if not url:
+            return False
+        scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+        creds_dict = dict(st.secrets["gcp_service_account"])
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
+        client = gspread.authorize(creds)
+        sh = client.open_by_url(url)
+        worksheet = sh.sheet1
+        # 対象行を検索
+        cell = worksheet.find(front, in_column=1)
+        if cell:
+            worksheet.update_cell(cell.row, 7, notes)
+            # キャッシュクリア
+            st.cache_data.clear()
+            return True
+        return False
+    except Exception as e:
+        st.error(f"メモの保存に失敗しました: {e}")
+        return False
+
+
+def save_explanation_to_sheet(front: str, explanation: str):
+    """6列目（解説）をスプレッドシートに追記する。"""
+    try:
+        url = st.session_state.get("current_deck_url") or st.secrets.get("spreadsheet_url")
+        if not url:
+            return False
+        scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+        creds_dict = dict(st.secrets["gcp_service_account"])
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
+        client = gspread.authorize(creds)
+        sh = client.open_by_url(url)
+        worksheet = sh.sheet1
+        cell = worksheet.find(front, in_column=1)
+        if cell:
+            existing = worksheet.cell(cell.row, 6).value or ""
+            new_val = (existing + "\n" + explanation).strip() if existing else explanation
+            worksheet.update_cell(cell.row, 6, new_val)
+            st.cache_data.clear()
+            return True
+        return False
+    except Exception as e:
+        st.error(f"解説の保存に失敗しました: {e}")
+        return False
 
 
 def get_word_status(word: str) -> str | None:
@@ -975,6 +1029,48 @@ def quiz_mode(data: list[dict]):
                 f'</div>',
                 unsafe_allow_html=True,
             )
+
+        # 6. メモ・参考URL入力欄
+        st.divider()
+        st.markdown("####  📝 メモ・参考URLメモ")
+        st.caption("調べた内容やURLをメモしておくと次回から表示されます。")
+
+        # キャッシュから既存のメモを取得
+        notes_cache_key = f"notes_{q['front']}"
+        if notes_cache_key not in st.session_state:
+            # データから取得
+            existing_notes = q.get("notes", "")
+            st.session_state[notes_cache_key] = existing_notes
+
+        notes_input = st.text_area(
+            "メモ入力欄",
+            value=st.session_state[notes_cache_key],
+            height=120,
+            key=f"notes_area_{q['front']}",
+            label_visibility="collapsed",
+            placeholder="調べた内容、参考にしたURLなどを自由に記入してください...",
+        )
+
+        col_save, col_adopt = st.columns(2)
+        with col_save:
+            if st.button("💾 メモを保存", key=f"save_notes_{q['front']}", use_container_width=True):
+                if save_notes_to_sheet(q["front"], notes_input):
+                    st.session_state[notes_cache_key] = notes_input
+                    st.success("メモを保存しました！")
+                else:
+                    # シートが見つからなかった場合はセッションのみ保存
+                    st.session_state[notes_cache_key] = notes_input
+                    st.warning("シートへの保存は失敗しましたが、セッション内に保持しています。")
+        with col_adopt:
+            if st.button("📝 解説として採用 (列６に追記)", key=f"adopt_expl_{q['front']}", use_container_width=True):
+                if notes_input.strip():
+                    if save_explanation_to_sheet(q["front"], notes_input):
+                        st.success("解説として追記しました！")
+                    else:
+                        st.error("解説の保存に失敗しました。")
+                else:
+                    st.warning("メモの内容が空です。")
+
         return
 
         return
