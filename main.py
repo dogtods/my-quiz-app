@@ -36,6 +36,12 @@ try:
 except ImportError:
     JS_EVAL_AVAILABLE = False
 
+try:
+    from google import genai as google_genai_client
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
+
 # ---------------------------------------------------------------------------
 # ページ設定
 # ---------------------------------------------------------------------------
@@ -638,8 +644,10 @@ def save_notes_to_sheet(front: str, notes: str):
         cell = worksheet.find(front, in_column=1)
         if cell:
             worksheet.update_cell(cell.row, 7, notes)
-            # キャッシュクリア
+            # キャッシュクリア（シートデータキャッシュとセッションデータキャッシュの両方）
             st.cache_data.clear()
+            for key in ["session_data_cache_key", "session_data_cache"]:
+                st.session_state.pop(key, None)
             return True
         return False
     except Exception as e:
@@ -664,12 +672,40 @@ def save_explanation_to_sheet(front: str, explanation: str):
             existing = worksheet.cell(cell.row, 6).value or ""
             new_val = (existing + "\n" + explanation).strip() if existing else explanation
             worksheet.update_cell(cell.row, 6, new_val)
+            # キャッシュクリア（シートデータキャッシュとセッションデータキャッシュの両方）
             st.cache_data.clear()
+            for key in ["session_data_cache_key", "session_data_cache"]:
+                st.session_state.pop(key, None)
             return True
         return False
     except Exception as e:
         st.error(f"解説の保存に失敗しました: {e}")
         return False
+
+
+def ai_generate_notes(front: str, back: str) -> str:
+    """Gemini APIを使って不明単語の解説メモを自動生成する。"""
+    if not GEMINI_AVAILABLE:
+        return ""
+    api_key = st.secrets.get("gemini_api_key", "")
+    if not api_key:
+        return ""
+    try:
+        client = google_genai_client.Client(api_key=api_key)
+        prompt = (
+            f"以下の単語について、日本語で簡潔に解説してください（3行程度）。"
+            f"記憶に役立つ記憶法・語源・使用例などを含めてください。\n"
+            f"単語: {front}\n"
+            f"意味: {back}\n"
+        )
+        response = client.models.generate_content(
+            model="models/gemini-flash-lite-latest",
+            contents=prompt,
+        )
+        return response.text.strip()
+    except Exception as e:
+        st.error(f"AI解説の取得に失敗しました: {e}")
+        return ""
 
 
 def get_word_status(word: str) -> str | None:
@@ -1037,6 +1073,16 @@ def quiz_mode(data: list[dict]):
 
         # キャッシュから既存のメモを取得
         notes_cache_key = f"notes_{q['front']}"
+        ai_pending_key = f"ai_pending_{q['front']}"
+
+        # AIが生成したテキストが待機中なら、テキストエリアのレンダリング前に適用する
+        if ai_pending_key in st.session_state:
+            st.session_state[notes_cache_key] = st.session_state.pop(ai_pending_key)
+            # ウィジェットの内部状態もリセット（再初期化させる）
+            widget_key = f"notes_area_{q['front']}"
+            if widget_key in st.session_state:
+                del st.session_state[widget_key]
+
         if notes_cache_key not in st.session_state:
             # データから取得
             existing_notes = q.get("notes", "")
@@ -1070,6 +1116,42 @@ def quiz_mode(data: list[dict]):
                         st.error("解説の保存に失敗しました。")
                 else:
                     st.warning("メモの内容が空です。")
+
+        # AI解説自動生成ボタン
+        gemini_api_key = st.secrets.get("gemini_api_key", "")
+        ai_result_key = f"ai_result_{q['front']}"
+        if GEMINI_AVAILABLE and gemini_api_key:
+            if st.button("🤖 AIで解説を自動生成", key=f"ai_gen_{q['front']}", use_container_width=True):
+                with st.spinner("AIが解説を生成中..."):
+                    ai_text = ai_generate_notes(q["front"], q["back"])
+                if ai_text:
+                    st.session_state[ai_result_key] = ai_text
+
+            # AI生成結果を表示（生成済みの場合）
+            if ai_result_key in st.session_state:
+                ai_result = st.session_state[ai_result_key]
+                st.info(f"🤖 AI解説:\n\n{ai_result}")
+                col_ai1, col_ai2 = st.columns(2)
+                with col_ai1:
+                    if st.button("💾 AI解説をメモとして保存", key=f"ai_save_{q['front']}", use_container_width=True):
+                        if save_notes_to_sheet(q["front"], ai_result):
+                            st.session_state[notes_cache_key] = ai_result
+                            del st.session_state[ai_result_key]
+                            st.success("AI解説をメモとして保存しました！")
+                        else:
+                            st.warning("シートへの保存は失敗しました。")
+                with col_ai2:
+                    if st.button("📝 AI解説を解説欄(列6)に保存", key=f"ai_adopt_{q['front']}", use_container_width=True):
+                        if save_explanation_to_sheet(q["front"], ai_result):
+                            del st.session_state[ai_result_key]
+                            st.success("解説欄に保存しました！")
+                        else:
+                            st.error("保存に失敗しました。")
+        else:
+            if not GEMINI_AVAILABLE:
+                st.caption("⚠️ AI機能: ライブラリ未ロード (GEMINI_AVAILABLE=False)")
+            elif not gemini_api_key:
+                st.caption("💡 `secrets.toml` に `gemini_api_key` を追記すると、AI解説自動生成ボタンが有効になります。")
 
         return
 
