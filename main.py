@@ -37,9 +37,11 @@ except ImportError:
     JS_EVAL_AVAILABLE = False
 
 try:
-    from google import genai as google_genai_client
+    import google.genai as google_genai_client
+    # 接続テストとしてClientクラスの存在を確認
+    _ = google_genai_client.Client
     GEMINI_AVAILABLE = True
-except ImportError:
+except Exception:
     GEMINI_AVAILABLE = False
 
 # ---------------------------------------------------------------------------
