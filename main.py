@@ -36,13 +36,10 @@ try:
 except ImportError:
     JS_EVAL_AVAILABLE = False
 
-try:
-    import google.genai as google_genai_client
-    # 接続テストとしてClientクラスの存在を確認
-    _ = google_genai_client.Client
-    GEMINI_AVAILABLE = True
-except Exception:
-    GEMINI_AVAILABLE = False
+# Gemini AI: SDKの代わりにrequestsで直接REST APIを呼ぶ（ライブラリ依存なし）
+import requests as _requests
+GEMINI_AVAILABLE = True  # requestsは常に使えるのでTrue固定
+GEMINI_ERROR = None
 
 # ---------------------------------------------------------------------------
 # ページ設定
@@ -686,25 +683,28 @@ def save_explanation_to_sheet(front: str, explanation: str):
 
 
 def ai_generate_notes(front: str, back: str) -> str:
-    """Gemini APIを使って不明単語の解説メモを自動生成する。"""
-    if not GEMINI_AVAILABLE:
-        return ""
+    """Gemini REST APIを直接呼び出して設問と回答から解説メモを自動生成する。"""
     api_key = st.secrets.get("gemini_api_key", "")
     if not api_key:
         return ""
     try:
-        client = google_genai_client.Client(api_key=api_key)
+        url = (
+            "https://generativelanguage.googleapis.com/v1beta/"
+            f"models/gemini-flash-lite-latest:generateContent?key={api_key}"
+        )
         prompt = (
-            f"以下の単語について、日本語で簡潔に解説してください（3行程度）。"
-            f"記憶に役立つ記憶法・語源・使用例などを含めてください。\n"
-            f"単語: {front}\n"
-            f"意味: {back}\n"
+            f"以下のクイズの設問と正解を見て、日本語で解説を準備してください。3行程度で簡潔に：\n"
+            f"「なぜこの回答なのか」「認識のポイント」「記憶のコツ」を含めてください。\n\n"
+            f"設問: {front}\n"
+            f"正解: {back}\n"
         )
-        response = client.models.generate_content(
-            model="models/gemini-flash-lite-latest",
-            contents=prompt,
-        )
-        return response.text.strip()
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}]
+        }
+        resp = _requests.post(url, json=payload, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        return data["candidates"][0]["content"]["parts"][0]["text"].strip()
     except Exception as e:
         st.error(f"AI解説の取得に失敗しました: {e}")
         return ""
@@ -1151,9 +1151,10 @@ def quiz_mode(data: list[dict]):
                             st.error("保存に失敗しました。")
         else:
             if not GEMINI_AVAILABLE:
-                st.caption("⚠️ AI機能: ライブラリ未ロード (GEMINI_AVAILABLE=False)")
+                err_msg = GEMINI_ERROR or "不明なエラー"
+                st.caption(f"⚠️ AI機能: ライブラリ未ロード — {err_msg}")
             elif not gemini_api_key:
-                st.caption("💡 `secrets.toml` に `gemini_api_key` を追記すると、AI解説自動生成ボタンが有効になります。")
+                st.caption("⚠️ AI機能: APIキー未設定 (secrets.toml に gemini_api_key が見つかりません)")
 
         return
 
