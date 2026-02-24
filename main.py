@@ -10,8 +10,8 @@ Streamlit 学習用Webアプリ
 import streamlit as st
 import random
 import json
+import re
 import time
-import urllib.parse
 from datetime import datetime, timezone, timedelta
 
 # ---------------------------------------------------------------------------
@@ -650,7 +650,11 @@ def save_notes_to_sheet(front: str, notes: str):
             return True
         return False
     except Exception as e:
-        st.error(f"メモの保存に失敗しました: {e}")
+        if "403" in str(e):
+            client_email = st.secrets.get("gcp_service_account", {}).get("client_email", "不明")
+            st.error(f"⚠️ スプレッドシートの権限エラー (403)\n\nこの機能を使うには、スプレッドシートの画面右上の「共有」ボタンから、以下のメールアドレスを「編集者」として追加してください：\n\n`{client_email}`")
+        else:
+            st.error(f"メモの保存に失敗しました: {e}")
         return False
 
 
@@ -678,36 +682,129 @@ def save_explanation_to_sheet(front: str, explanation: str):
             return True
         return False
     except Exception as e:
-        st.error(f"解説の保存に失敗しました: {e}")
+        if "403" in str(e):
+            client_email = st.secrets.get("gcp_service_account", {}).get("client_email", "不明")
+            st.error(f"⚠️ スプレッドシートの権限エラー (403)\n\nこの機能を使うには、スプレッドシートの画面右上の「共有」ボタンから、以下のメールアドレスを「編集者」として追加してください：\n\n`{client_email}`")
+        else:
+            st.error(f"解説の保存に失敗しました: {e}")
         return False
 
 
+def _call_gemini(prompt: str, api_key: str) -> str:
+    """Gemini REST APIを共通呼び出し関数。"""
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/"
+        f"models/gemini-flash-lite-latest:generateContent?key={api_key}"
+    )
+    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    resp = _requests.post(url, json=payload, timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+    return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+
+
+def render_mermaid(code: str):
+    """Mermaidコードをmermaid.ink経由で画像として表示する。"""
+    import base64
+    encoded = base64.urlsafe_b64encode(code.encode("utf-8")).decode("ascii")
+    img_url = f"https://mermaid.ink/img/{encoded}"
+    st.image(img_url, use_container_width=True)
+
+
 def ai_generate_notes(front: str, back: str) -> str:
-    """Gemini REST APIを直接呼び出して設問と回答から解説メモを自動生成する。"""
+    """[Button 1] 正解の理由と記憶のコツを簡潔に解説。"""
     api_key = st.secrets.get("gemini_api_key", "")
     if not api_key:
         return ""
     try:
-        url = (
-            "https://generativelanguage.googleapis.com/v1beta/"
-            f"models/gemini-flash-lite-latest:generateContent?key={api_key}"
-        )
         prompt = (
             f"以下のクイズの設問と正解を見て、日本語で解説を準備してください。3行程度で簡潔に：\n"
             f"「なぜこの回答なのか」「認識のポイント」「記憶のコツ」を含めてください。\n\n"
             f"設問: {front}\n"
             f"正解: {back}\n"
         )
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}]
-        }
-        resp = _requests.post(url, json=payload, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-        return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        return _call_gemini(prompt, api_key)
     except Exception as e:
         st.error(f"AI解説の取得に失敗しました: {e}")
         return ""
+
+
+def ai_explain_options(front: str, back: str, options: list[str]) -> str:
+    """[Button 2] 全選択肢（正解・誤選択肢両方）の意味を解説。"""
+    api_key = st.secrets.get("gemini_api_key", "")
+    if not api_key:
+        return ""
+    try:
+        options_text = "\n".join([f"-  {opt}" for opt in options])
+        prompt = (
+            f"以下のクイズの全選択肢を見て、各選択肢の意味、正解との違いを日本語で解説してください。\n"
+            f"各選択肢に2行程度で説明してください。\n\n"
+            f"設問: {front}\n"
+            f"正解: {back}\n"
+            f"選択肢:\n{options_text}\n"
+        )
+        return _call_gemini(prompt, api_key)
+    except Exception as e:
+        st.error(f"他の回答解説の取得に失敗しました: {e}")
+        return ""
+
+
+def ai_generate_diagram(front: str, back: str) -> str:
+    """[Button 3] 設問の概念をテキストベース（ASCII/記号）の図解として生成。"""
+    api_key = st.secrets.get("gemini_api_key", "")
+    if not api_key:
+        return ""
+    try:
+        prompt = (
+            f"以下のクイズの設問と正解から、概念の関係性やプロセスを「テキストベースの図解」として作成してください。\n"
+            f"特殊記号（→, ↴, ┝, ┃, ━, ┌, ┐, └, ┘）やASCII文字を使って、シンプルに文字だけで構造を表現してください。\n"
+            f"画像やコード（Mermaid等）は不要です。文字だけで視覚的にわかる図にしてください。\n\n"
+            f"設問: {front}\n"
+            f"正解: {back}\n"
+        )
+        return _call_gemini(prompt, api_key)
+    except Exception as e:
+        st.error(f"図解の生成に失敗しました: {e}")
+        return ""
+
+
+
+
+def ai_generate_keywords(front: str) -> list[str]:
+    """Geminiを用いて設問から重要なキーワードを抽出する。"""
+    api_key = st.secrets.get("gemini_api_key", "")
+    if not api_key:
+        return []
+    try:
+        prompt = (
+            f"以下のクイズの設問から、Google検索に役立つ重要なキーワード（専門用語、固有名詞など）を3〜5個抽出してください。"
+            f"結果はカンマ区切りのみの形式で出力してください。\n\n"
+            f"設問: {front}"
+        )
+        resp = _call_gemini(prompt, api_key)
+        # カンマやスペース、改行で分割してリスト化
+        keywords = [k.strip() for k in resp.replace("\n", ",").split(",") if k.strip()]
+        return keywords
+    except Exception:
+        return []
+
+
+def extract_keywords(text: str, n: int = 2) -> list[str]:
+    """設問テキストからキーとなる語を最大n件抽出する（AIなし・コストゼロ）。"""
+    # 句読点・かっこ・助詞パターンで分割
+    parts = re.split(r'[。、,，.．\s　「」『』（）()【】〔〕・…ー\-\+\?？！!：:；;]', text)
+    tokens = [p.strip() for p in parts if len(p.strip()) >= 2]
+    # 「の/は/が/を/に/で/と/も/か/や/へ/から/まで/より/だ/です/ます」等のひらがなのみトークンを除外
+    stop_hiragana = re.compile(r'^[ぁ-ん]{1,3}$')
+    tokens = [t for t in tokens if not stop_hiragana.match(t)]
+    # 重複削除・長さ降順ソートで上位n件
+    seen = set()
+    unique = []
+    for t in sorted(tokens, key=len, reverse=True):
+        if t not in seen:
+            seen.add(t)
+            unique.append(t)
+    return unique[:n]
 
 
 def get_word_status(word: str) -> str | None:
@@ -1048,56 +1145,92 @@ def quiz_mode(data: list[dict]):
             unsafe_allow_html=True,
         )
         
-        # 4.5 選択肢の再表示（確認用）
+        # 4.5 選択肢の再表示（復活）
         st.caption("選択肢:")
         for opt in st.session_state.quiz_options:
             if opt == q["back"]:
                 st.info(f"⭕ {opt}")
-            elif opt == st.session_state.get("quiz_selected_option"): # 選択した誤答（もし保存していれば）
+            elif opt == st.session_state.get("quiz_selected_option"):
                 st.error(f"❌ {opt}")
             else:
                 st.text(f"・ {opt}")
 
-        # 5. スコア (再掲) - 小さめに変更
-        if total > 0:
-            rate = int(score / total * 100)
-            st.markdown(
-                f'<div style="text-align:center; margin:16px 0; padding:12px; background:#f0f2f6; border-radius:12px;">'
-                f'<h4 style="margin:0;">スコア: {score} / {total} (正答率 {rate}%)</h4>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
+        # --- AI機能（メモ欄より上に配置） ---
+        gemini_api_key = st.secrets.get("gemini_api_key", "")
+        if GEMINI_AVAILABLE and gemini_api_key:
+            st.divider()
+            col_btn1, col_btn2, col_btn3 = st.columns(3)
+            with col_btn1:
+                if st.button("🤖 AI解説", key=f"ai_gen_{q['front']}", use_container_width=True):
+                    with st.spinner("AIが解説を生成中..."):
+                        ai_text = ai_generate_notes(q["front"], q["back"])
+                    if ai_text:
+                        st.session_state[f"ai_result_{q['front']}"] = ai_text
+
+            with col_btn2:
+                if st.button("🔍 他も解説", key=f"ai_opts_{q['front']}", use_container_width=True):
+                    with st.spinner("AIが選択肢を解説中..."):
+                        opts_text = ai_explain_options(
+                            q["front"], q["back"],
+                            options=st.session_state.get("quiz_options", [])
+                        )
+                    if opts_text:
+                        st.session_state[f"ai_opts_result_{q['front']}"] = opts_text
+
+            with col_btn3:
+                if st.button("📊 図解生成", key=f"ai_diag_{q['front']}", use_container_width=True):
+                    with st.spinner("AIが図解を生成中..."):
+                        diagram_code = ai_generate_diagram(q["front"], q["back"])
+                    if diagram_code:
+                        st.session_state[f"ai_diagram_{q['front']}"] = diagram_code
 
         # 6. メモ・参考URL入力欄
         st.divider()
         st.markdown("####  📝 メモ・参考URLメモ")
         st.caption("調べた内容やURLをメモしておくと次回から表示されます。")
 
-        # キャッシュから既存のメモを取得
+        # メモのキャッシュキー
         notes_cache_key = f"notes_{q['front']}"
         ai_pending_key = f"ai_pending_{q['front']}"
+        kw_pending_key = f"kw_pending_{q['front']}"
+        notes_counter_key = f"notes_counter_{q['front']}"
+        if notes_counter_key not in st.session_state:
+            st.session_state[notes_counter_key] = 0
 
-        # AIが生成したテキストが待機中なら、テキストエリアのレンダリング前に適用する
-        if ai_pending_key in st.session_state:
-            st.session_state[notes_cache_key] = st.session_state.pop(ai_pending_key)
-            # ウィジェットの内部状態もリセット（再初期化させる）
-            widget_key = f"notes_area_{q['front']}"
-            if widget_key in st.session_state:
-                del st.session_state[widget_key]
+        # ペンディングの適用
+        for pkey in [ai_pending_key, kw_pending_key]:
+            if pkey in st.session_state:
+                st.session_state[notes_cache_key] = st.session_state.pop(pkey)
+                st.session_state[notes_counter_key] += 1
 
         if notes_cache_key not in st.session_state:
-            # データから取得
-            existing_notes = q.get("notes", "")
-            st.session_state[notes_cache_key] = existing_notes
+            st.session_state[notes_cache_key] = q.get("notes", "")
+
+        notes_widget_key = f"notes_area_{q['front']}_{st.session_state[notes_counter_key]}"
 
         notes_input = st.text_area(
             "メモ入力欄",
             value=st.session_state[notes_cache_key],
             height=120,
-            key=f"notes_area_{q['front']}",
+            key=notes_widget_key,
             label_visibility="collapsed",
             placeholder="調べた内容、参考にしたURLなどを自由に記入してください...",
         )
+
+        # --- キーワードボタン（順序：選択肢4つ → 抽出キーワード2つ） ---
+        all_options = st.session_state.get("quiz_options", [])
+        kw_from_q = extract_keywords(q["front"], n=2)
+        kw_candidates = all_options + kw_from_q
+        if kw_candidates:
+            st.caption("🏷️ タップしてメモ欄に追加:")
+            kw_cols = st.columns(3)
+            for i, kw in enumerate(kw_candidates):
+                with kw_cols[i % 3]:
+                    if st.button(kw, key=f"kw_memo_btn_{i}_{q['front']}", use_container_width=True):
+                        current = st.session_state.get(notes_widget_key, notes_input)
+                        sep = "\n" if current.strip() else ""
+                        st.session_state[kw_pending_key] = current + sep + kw
+                        st.rerun()
 
         col_save, col_adopt = st.columns(2)
         with col_save:
@@ -1119,42 +1252,69 @@ def quiz_mode(data: list[dict]):
                 else:
                     st.warning("メモの内容が空です。")
 
-        # AI解説自動生成ボタン
-        gemini_api_key = st.secrets.get("gemini_api_key", "")
-        ai_result_key = f"ai_result_{q['front']}"
-        if GEMINI_AVAILABLE and gemini_api_key:
-            if st.button("🤖 AIで解説を自動生成", key=f"ai_gen_{q['front']}", use_container_width=True):
-                with st.spinner("AIが解説を生成中..."):
-                    ai_text = ai_generate_notes(q["front"], q["back"])
-                if ai_text:
-                    st.session_state[ai_result_key] = ai_text
 
-            # AI生成結果を表示（生成済みの場合）
-            if ai_result_key in st.session_state:
-                ai_result = st.session_state[ai_result_key]
-                st.info(f"🤖 AI解説:\n\n{ai_result}")
-                col_ai1, col_ai2 = st.columns(2)
-                with col_ai1:
-                    if st.button("💾 AI解説をメモとして保存", key=f"ai_save_{q['front']}", use_container_width=True):
-                        if save_notes_to_sheet(q["front"], ai_result):
-                            st.session_state[notes_cache_key] = ai_result
-                            del st.session_state[ai_result_key]
-                            st.success("AI解説をメモとして保存しました！")
-                        else:
-                            st.warning("シートへの保存は失敗しました。")
-                with col_ai2:
-                    if st.button("📝 AI解説を解説欄(列6)に保存", key=f"ai_adopt_{q['front']}", use_container_width=True):
-                        if save_explanation_to_sheet(q["front"], ai_result):
-                            del st.session_state[ai_result_key]
-                            st.success("解説欄に保存しました！")
-                        else:
-                            st.error("保存に失敗しました。")
+
+        # --- AI結果表示セクション ---
+        if GEMINI_AVAILABLE and gemini_api_key:
+            # 定義：各結果に対して保存ボタンを表示するヘルパー（関数内関数）
+            def show_result_with_save_buttons(result_key, title, icon, color_type="info"):
+                if result_key in st.session_state:
+                    content = st.session_state[result_key]
+                    if color_type == "info":
+                        st.info(f"{icon} {title}:\n\n{content}")
+                    elif color_type == "success":
+                        st.success(f"{icon} {title}:\n\n{content}")
+                    
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        if st.button("💾 メモとして保存", key=f"save_n_{result_key}", use_container_width=True):
+                            if save_notes_to_sheet(q["front"], content):
+                                st.session_state[notes_cache_key] = content
+                                # テキストエリアのウィジェット状態を強制更新
+                                w_key = f"notes_area_{q['front']}"
+                                if w_key in st.session_state:
+                                    del st.session_state[w_key]
+                                del st.session_state[result_key]
+                                st.toast("メモを保存しました！", icon="✅")
+                                st.rerun()
+                            else:
+                                st.error("シートへの保存に失敗しました。")
+                    with c2:
+                        if st.button("📝 解説欄(列6)に保存", key=f"save_e_{result_key}", use_container_width=True):
+                            if save_explanation_to_sheet(q["front"], content):
+                                del st.session_state[result_key]
+                                st.toast("解説欄に保存しました！", icon="📝")
+                                st.rerun()
+                            else:
+                                st.error("解説の保存に失敗しました。")
+
+            # 1. AI解説の結果
+            show_result_with_save_buttons(f"ai_result_{q['front']}", "AI解説", "🤖")
+
+            # 2. 他の回答の解説の結果
+            show_result_with_save_buttons(f"ai_opts_result_{q['front']}", "選択肢の解説", "🔍", "success")
+
+            # 3. 図解の結果
+            show_result_with_save_buttons(f"ai_diagram_{q['front']}", "テキスト図解", "📊")
+
         else:
             if not GEMINI_AVAILABLE:
                 err_msg = GEMINI_ERROR or "不明なエラー"
                 st.caption(f"⚠️ AI機能: ライブラリ未ロード — {err_msg}")
             elif not gemini_api_key:
                 st.caption("⚠️ AI機能: APIキー未設定 (secrets.toml に gemini_api_key が見つかりません)")
+
+            # --- スコア (最下部へ移動) ---
+            total = st.session_state.quiz_total
+            score = st.session_state.quiz_score
+            if total > 0:
+                rate = int(score / total * 100)
+                st.markdown(
+                    f'<div style="text-align:center; margin-top:24px; padding:12px; background:#f0f2f6; border-radius:12px;">'
+                    f'<h4 style="margin:0;">スコア: {score} / {total} (正答率 {rate}%)</h4>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
 
         return
 
