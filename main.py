@@ -12,6 +12,7 @@ import random
 import json
 import re
 import time
+import urllib.parse
 from datetime import datetime, timezone, timedelta
 
 # ---------------------------------------------------------------------------
@@ -746,7 +747,7 @@ def ai_generate_notes(front: str, back: str) -> str:
         return ""
     try:
         prompt = (
-            f"以下のクイズの設問と正解を見て、日本語で解説を準備してください。3行程度で簡潔に：\n"
+            f"以下のクイズの設問と正解を見て、日本語で解説を準備してください。3行程度で簡潔に、初心者でもわかるようにかみ砕いて：\n"
             f"「なぜこの回答なのか」「認識のポイント」「記憶のコツ」を含めてください。\n\n"
             f"設問: {front}\n"
             f"正解: {back}\n"
@@ -972,16 +973,26 @@ def filter_and_slice_data(data: list[dict], limit_str: str, filter_mastered: boo
         return []
 
     # 1. 習熟度フィルター
-    filtered = list(data)
     if filter_mastered:
-        # 正解履歴があるものを除外（get_word_statusが 'correct' のもの）
-        filtered = [d for d in filtered if get_word_status(d["front"]) != "correct"]
+        # 正解履歴がないもの（未習熟）
+        unmastered = [d for d in data if get_word_status(d["front"]) != "correct"]
+        # 正解履歴があるもの（既習）
+        mastered = [d for d in data if get_word_status(d["front"]) == "correct"]
+        
+        # 既習問題から一定割合（約20%、最低1問）をランダムに混ぜる
+        # これにより、既習問題も低頻度で復習として出現する
+        num_mastered_to_include = max(1, len(mastered) // 5) if mastered else 0
+        sampled_mastered = random.sample(mastered, min(num_mastered_to_include, len(mastered)))
+        
+        filtered = unmastered + sampled_mastered
+    else:
+        filtered = list(data)
     
     # 2. ランダムシャッフル & スライス
     # セッション内で一貫性を保つため、session_state にキャッシュする
     
     # 現在の設定状況を表すキー
-    current_key = f"{st.session_state.get('current_deck_url')}_{limit_str}_{filter_mastered}_length{len(data)}"
+    current_key = f"{st.session_state.get('current_deck_url')}_{limit_str}_{filter_mastered}_len{len(data)}"
     
     # キャッシュがない、またはキーが変わった場合は再生成
     if "session_data_cache" not in st.session_state or st.session_state.get("session_cache_key") != current_key:
@@ -1327,31 +1338,30 @@ def quiz_mode(data: list[dict]):
 
             # 3. 図解の結果
             show_result_with_save_buttons(f"ai_diagram_{q['front']}", "テキスト図解", "📊")
-
-        else:
+        # 6. AI機能の警告表示 (Gemini未設定時など)
+        if not (GEMINI_AVAILABLE and gemini_api_key):
             if not GEMINI_AVAILABLE:
                 err_msg = GEMINI_ERROR or "不明なエラー"
                 st.caption(f"⚠️ AI機能: ライブラリ未ロード — {err_msg}")
             elif not gemini_api_key:
                 st.caption("⚠️ AI機能: APIキー未設定 (secrets.toml に gemini_api_key が見つかりません)")
 
-            # --- スコア (最下部へ移動) ---
-            total = st.session_state.quiz_total
-            score = st.session_state.quiz_score
-            if total > 0:
-                rate = int(score / total * 100)
-                st.markdown(
-                    f'<div style="text-align:center; margin-top:24px; padding:12px; background:#f0f2f6; border-radius:12px;">'
-                    f'<h4 style="margin:0;">スコア: {score} / {total} (正答率 {rate}%)</h4>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
-
-        return
-
+        # --- スコア表示 (解答済み画面の最下部) ---
+        total = st.session_state.quiz_total
+        score = st.session_state.quiz_score
+        if total > 0:
+            rate = int(score / total * 100)
+            st.markdown(
+                f'<div style="text-align:center; margin-top:24px; padding:12px; background:#f0f2f6; border-radius:12px;">'
+                f'<h4 style="margin:0;">スコア: {score} / {total} (正答率 {rate}%)</h4>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        
+        # 解答済み画面の最後で確実に return する
         return
     
-    # 選択肢ボタン
+    # --- 未解答時の選択肢ボタン表示 ---
     for i, option in enumerate(st.session_state.quiz_options):
         # 4択は gap を狭くする
         if st.button(option, key=f"opt_{i}", use_container_width=True):
@@ -1719,7 +1729,7 @@ def main():
         selected_limit = st.radio("1回の出題数", limit_options, index=1, horizontal=True)
         
         # 習熟度フィルター
-        filter_mastered = st.checkbox("覚えた（正解した）問題を除外", value=True)
+        filter_mastered = st.checkbox("覚えた問題の頻度を下げて出題", value=True)
         
         # マッチングゲーム設定（モードがマッチングの時のみ表示、または常時表示）
         # ここではシンプルに常時表示し、モード切り替え時に適用されるようにする
@@ -1738,6 +1748,9 @@ def main():
         if st.button("学習履歴をリセット"):
             if JS_EVAL_AVAILABLE:
                 st.session_state.history = []
+                # キャッシュキーも削除して再生成を促す
+                if "session_cache_key" in st.session_state:
+                    del st.session_state.session_cache_key
                 # LocalStorageもクリア
                 streamlit_js_eval(
                     js_expressions=f"localStorage.removeItem('{LS_KEY}')",
@@ -1751,6 +1764,7 @@ def main():
     if st.session_state.get("current_settings") != current_settings:
         st.session_state.current_settings = current_settings
         st.session_state.current_deck_url = selected_deck_url  # デッキURLを更新
+        st.session_state.sheets_history_loaded = False         # 切り替え時に履歴を再読み込み
         st.session_state.quiz_pool = None
         st.session_state.quiz_question = None
         st.session_state.quiz_finished = False
