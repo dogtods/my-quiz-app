@@ -646,8 +646,7 @@ def save_notes_to_sheet(front: str, notes: str):
             worksheet.update_cell(cell.row, 7, notes)
             # キャッシュクリア（シートデータキャッシュとセッションデータキャッシュの両方）
             st.cache_data.clear()
-            for key in ["session_data_cache_key", "session_data_cache"]:
-                st.session_state.pop(key, None)
+            # st.session_state.pop(key, None) # 停止：クイズ状態維持のため
             return True
         return False
     except Exception as e:
@@ -678,8 +677,7 @@ def save_explanation_to_sheet(front: str, explanation: str):
             worksheet.update_cell(cell.row, 6, new_val)
             # キャッシュクリア（シートデータキャッシュとセッションデータキャッシュの両方）
             st.cache_data.clear()
-            for key in ["session_data_cache_key", "session_data_cache"]:
-                st.session_state.pop(key, None)
+            # st.session_state.pop(key, None) # 停止：クイズ状態維持のため
             return True
         return False
     except Exception as e:
@@ -967,7 +965,7 @@ def init_session_state():
 init_session_state()
 
 
-def filter_and_slice_data(data: list[dict], limit_str: str, filter_mastered: bool) -> list[dict]:
+def filter_and_slice_data(data: list[dict], limit_str: str, filter_mastered: bool, mastered_rate: int = 20) -> list[dict]:
     """設定に基づいてデータをフィルタリングおよびスライスする。"""
     if not data:
         return []
@@ -979,9 +977,8 @@ def filter_and_slice_data(data: list[dict], limit_str: str, filter_mastered: boo
         # 正解履歴があるもの（既習）
         mastered = [d for d in data if get_word_status(d["front"]) == "correct"]
         
-        # 既習問題から一定割合（約20%、最低1問）をランダムに混ぜる
-        # これにより、既習問題も低頻度で復習として出現する
-        num_mastered_to_include = max(1, len(mastered) // 5) if mastered else 0
+        # 既習問題から指定割合をランダムに混ぜる
+        num_mastered_to_include = max(1, len(mastered) * mastered_rate // 100) if mastered and mastered_rate > 0 else 0
         sampled_mastered = random.sample(mastered, min(num_mastered_to_include, len(mastered)))
         
         filtered = unmastered + sampled_mastered
@@ -992,7 +989,7 @@ def filter_and_slice_data(data: list[dict], limit_str: str, filter_mastered: boo
     # セッション内で一貫性を保つため、session_state にキャッシュする
     
     # 現在の設定状況を表すキー
-    current_key = f"{st.session_state.get('current_deck_url')}_{limit_str}_{filter_mastered}_len{len(data)}"
+    current_key = f"{st.session_state.get('current_deck_url')}_{limit_str}_{filter_mastered}_{mastered_rate}_len{len(data)}"
     
     # キャッシュがない、またはキーが変わった場合は再生成
     if "session_data_cache" not in st.session_state or st.session_state.get("session_cache_key") != current_key:
@@ -1309,23 +1306,23 @@ def quiz_mode(data: list[dict]):
                     
                     c1, c2 = st.columns(2)
                     with c1:
-                        if st.button("💾 メモとして保存", key=f"save_n_{result_key}", use_container_width=True):
+                        if st.button("💾 メモとして保存", key=f"save_n_{result_key}_{q['front']}", use_container_width=True):
                             if save_notes_to_sheet(q["front"], content):
                                 st.session_state[notes_cache_key] = content
-                                # テキストエリアのウィジェット状態を強制更新
-                                w_key = f"notes_area_{q['front']}"
-                                if w_key in st.session_state:
-                                    del st.session_state[w_key]
+                                # 本体のメモ入力欄ウィジェットを更新するためにカウンターを上げる
+                                st.session_state[notes_counter_key] += 1
                                 del st.session_state[result_key]
                                 st.toast("メモを保存しました！", icon="✅")
+                                time.sleep(0.5)
                                 st.rerun()
                             else:
                                 st.error("シートへの保存に失敗しました。")
                     with c2:
-                        if st.button("📝 解説欄(列6)に保存", key=f"save_e_{result_key}", use_container_width=True):
+                        if st.button("📝 解説欄(列6)に保存", key=f"save_e_{result_key}_{q['front']}", use_container_width=True):
                             if save_explanation_to_sheet(q["front"], content):
                                 del st.session_state[result_key]
                                 st.toast("解説欄に保存しました！", icon="📝")
+                                time.sleep(0.5)
                                 st.rerun()
                             else:
                                 st.error("解説の保存に失敗しました。")
@@ -1730,8 +1727,11 @@ def main():
         
         # 習熟度フィルター
         filter_mastered = st.checkbox("覚えた問題の頻度を下げて出題", value=True)
+        mastered_rate = 20
+        if filter_mastered:
+            mastered_rate = st.slider("既習問題の出現率 (%)", 0, 100, 20, step=5, help="正解済みの問題がどの程度の割合で混ざるかを設定します。0%にすると完全に出なくなります。")
         
-        # マッチングゲーム設定（モードがマッチングの時のみ表示、または常時表示）
+        # マッチングゲーム設定
         # ここではシンプルに常時表示し、モード切り替え時に適用されるようにする
         match_pairs = 8
         if mode == "マッチングゲーム":
@@ -1760,7 +1760,7 @@ def main():
                 st.success("履歴を削除しました")
 
     # デッキ変更または設定変更検知
-    current_settings = f"{selected_deck_url}_{selected_limit}_{filter_mastered}_{match_pairs}"
+    current_settings = f"{selected_deck_url}_{selected_limit}_{filter_mastered}_{mastered_rate}_{match_pairs}"
     if st.session_state.get("current_settings") != current_settings:
         st.session_state.current_settings = current_settings
         st.session_state.current_deck_url = selected_deck_url  # デッキURLを更新
@@ -1788,7 +1788,7 @@ def main():
         return
 
     # データをフィルタリング & スライス
-    filtered_data = filter_and_slice_data(data, selected_limit, filter_mastered)
+    filtered_data = filter_and_slice_data(data, selected_limit, filter_mastered, mastered_rate)
 
     if not filtered_data:
         st.warning("条件に一致する問題がありません（全て正解済み、またはデータ自体が空です）。")
