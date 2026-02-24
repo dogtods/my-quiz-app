@@ -691,16 +691,44 @@ def save_explanation_to_sheet(front: str, explanation: str):
 
 
 def _call_gemini(prompt: str, api_key: str) -> str:
-    """Gemini REST APIを共通呼び出し関数。"""
+    """Gemini REST APIを共通呼び出し関数（リトライ処理付き）。"""
     url = (
         "https://generativelanguage.googleapis.com/v1beta/"
         f"models/gemini-flash-lite-latest:generateContent?key={api_key}"
     )
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
-    resp = _requests.post(url, json=payload, timeout=30)
-    resp.raise_for_status()
-    data = resp.json()
-    return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+    
+    max_retries = 3
+    for i in range(max_retries):
+        try:
+            resp = _requests.post(url, json=payload, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        except _requests.exceptions.HTTPError as e:
+            status_code = e.response.status_code
+            if status_code in [429, 500, 503, 504] and i < max_retries - 1:
+                # 指数バックオフ (2, 4, 8秒)
+                wait_time = (2 ** (i + 1))
+                time.sleep(wait_time)
+                continue
+            
+            # エラーメッセージの日本語化
+            if status_code == 429:
+                raise Exception("AIの利用制限に達しました。少し時間を置いてから再度お試しください。")
+            elif status_code == 503:
+                raise Exception("AIサーバーが一時的に混み合っています。数分後に再度お試しください。")
+            elif status_code in [500, 504]:
+                raise Exception("AIサーバーでエラーが発生しました。時間を置いて再度お試しください。")
+            else:
+                raise Exception(f"通信エラーが発生しました (Status: {status_code})")
+        except _requests.exceptions.RequestException as e:
+            if i < max_retries - 1:
+                time.sleep(2)
+                continue
+            raise Exception(f"ネットワーク接続エラーが発生しました: {e}")
+    
+    raise Exception("AIからの応答が得られませんでした。")
 
 
 def render_mermaid(code: str):
@@ -902,7 +930,10 @@ def init_session_state():
                 st.session_state.history.sort(key=lambda x: x.get("timestamp", ""))
                 
             st.session_state.sheets_history_loaded = True
-        except Exception:
+            if sheets_history:
+                st.toast(f"シートから {len(sheets_history)} 件の履歴を統合しました", icon="📊")
+        except Exception as e:
+            # st.error(f"DEBUG: Sheets Load Error: {e}") # 本番用は非表示
             pass
 
     if "initialized" not in st.session_state:
@@ -1626,6 +1657,9 @@ def history_panel():
 # メイン
 # ===================================================================
 def main():
+    # セッションと履歴の初期化
+    init_session_state()
+
     # サイドバーで機能切り替え
     with st.sidebar:
         st.title("メニュー")
@@ -1716,6 +1750,7 @@ def main():
     current_settings = f"{selected_deck_url}_{selected_limit}_{filter_mastered}_{match_pairs}"
     if st.session_state.get("current_settings") != current_settings:
         st.session_state.current_settings = current_settings
+        st.session_state.current_deck_url = selected_deck_url  # デッキURLを更新
         st.session_state.quiz_pool = None
         st.session_state.quiz_question = None
         st.session_state.quiz_finished = False
