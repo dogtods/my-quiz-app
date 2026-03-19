@@ -738,18 +738,26 @@ def render_mermaid(code: str):
     st.image(img_url, use_container_width=True)
 
 
-def ai_generate_notes(front: str, back: str) -> str:
-    """[Button 1] 正解の理由と記憶のコツを簡潔に解説。"""
+def ai_generate_notes(front: str, back: str, custom_prompt: str = "") -> str:
+    """[Button 1] 正解の理由と記憶のコツを簡潔に解説。またはユーザーのカスタムプロンプトを実行。"""
     api_key = st.secrets.get("gemini_api_key", "")
     if not api_key:
         return ""
     try:
-        prompt = (
-            f"以下のクイズの設問と正解を見て、日本語で解説を準備してください。3行程度で簡潔に、初心者でもわかるようにかみ砕いて：\n"
-            f"「なぜこの回答なのか」「認識のポイント」「記憶のコツ」を含めてください。\n\n"
-            f"設問: {front}\n"
-            f"正解: {back}\n"
-        )
+        if custom_prompt.strip():
+            prompt = (
+                f"以下のクイズの設問と正解について、次の指示または質問に答えてください：\n"
+                f"指示・質問：{custom_prompt}\n\n"
+                f"設問: {front}\n"
+                f"正解: {back}\n"
+            )
+        else:
+            prompt = (
+                f"以下のクイズの設問と正解を見て、日本語で解説を準備してください。3行程度で簡潔に、初心者でもわかるようにかみ砕いて：\n"
+                f"「なぜこの回答なのか」「認識のポイント」「記憶のコツ」を含めてください。\n\n"
+                f"設問: {front}\n"
+                f"正解: {back}\n"
+            )
         return _call_gemini(prompt, api_key)
     except Exception as e:
         st.error(f"AI解説の取得に失敗しました: {e}")
@@ -1198,11 +1206,16 @@ def quiz_mode(data: list[dict]):
         gemini_api_key = st.secrets.get("gemini_api_key", "")
         if GEMINI_AVAILABLE and gemini_api_key:
             st.divider()
+            
+            # カスタムプロンプト入力欄
+            custom_prompt_key = f"custom_prompt_{q['front']}"
+            custom_prompt = st.text_input("🤖 AIへの追加の指示・質問（任意）", placeholder="例：〇〇との違いを教えて", key=custom_prompt_key)
+
             col_btn1, col_btn2, col_btn3 = st.columns(3)
             with col_btn1:
                 if st.button("🤖 AI解説", key=f"ai_gen_{q['front']}", use_container_width=True):
                     with st.spinner("AIが解説を生成中..."):
-                        ai_text = ai_generate_notes(q["front"], q["back"])
+                        ai_text = ai_generate_notes(q["front"], q["back"], custom_prompt)
                     if ai_text:
                         st.session_state[f"ai_result_{q['front']}"] = ai_text
 
