@@ -1482,7 +1482,7 @@ def quiz_mode(data: list[dict]):
             
             c_f, c_c = st.columns(2)
             with c_f:
-                if st.button("👨‍🏫 ファインマン・モード", help="中学生に説明する比喩を問う問題を作ります", use_container_width=True):
+                if st.button("👨‍🏫 ファインマン・モード", help="説明を問う問題を作ります", use_container_width=True):
                     with st.spinner("AIがファインマン・モードで問題を生成・登録中..."):
                         sheet_title = get_current_sheet_title()
                         quiz_data = ai_generate_new_quiz("feynman", q, sheet_title)
@@ -1494,7 +1494,7 @@ def quiz_mode(data: list[dict]):
                             time.sleep(1)
                             st.rerun()
             with c_c:
-                if st.button("👔 クライアント・モード", help="実務での例外や必要性を問う問題を作ります", use_container_width=True):
+                if st.button("👔 クライアント・モード", help="例外や必要性を問う問題を作ります", use_container_width=True):
                     with st.spinner("AIがクライアント・モードで問題を生成・登録中..."):
                         sheet_title = get_current_sheet_title()
                         quiz_data = ai_generate_new_quiz("client", q, sheet_title)
