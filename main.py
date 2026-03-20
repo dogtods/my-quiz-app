@@ -42,6 +42,8 @@ import requests as _requests
 GEMINI_AVAILABLE = True  # requestsは常に使えるのでTrue固定
 GEMINI_ERROR = None
 
+TARGET_SHEET_NAME = "{ここにシート名を記入}"
+
 # ---------------------------------------------------------------------------
 # ページ設定
 # ---------------------------------------------------------------------------
@@ -803,6 +805,98 @@ def ai_generate_diagram(front: str, back: str) -> str:
         return ""
 
 
+def ai_generate_new_quiz(mode: str, data: list[dict], target_sheet_name: str) -> dict | None:
+    api_key = st.secrets.get("gemini_api_key", "")
+    if not api_key:
+        return None
+        
+    if not data:
+        return None
+        
+    # 既存データからランダムに1つの「用語 (front)」と「定義 (back)」を選択
+    source = random.choice(data)
+    term = source["front"]
+    definition = source["back"]
+
+    if mode == "feynman":
+        prompt = (
+            f"あなたは『{target_sheet_name}』のシニアエキスパートです。\n"
+            f"以下の用語と定義に基づいて新しい4択クイズを作成してください。\n"
+            f"「中学生に説明する場合、どの比喩が最も本質を突いているか？」という切り口で問題を作成してください。\n"
+        )
+    else: # client
+        prompt = (
+            f"あなたは『{target_sheet_name}』のシニアエキスパートです。\n"
+            f"以下の用語と定義に基づいて新しい4択クイズを作成してください。\n"
+            f"クライアントからの「なぜ必要か？」「どう使うか？」という質問への回答、または「適用できない例外ケース」を問う、実務上の信頼を勝ち取るための実践的な問題を作成してください。\n"
+        )
+
+    prompt += (
+        f"【元の用語】: {term}\n"
+        f"【元の定義】: {definition}\n\n"
+        f"【誤答の条件】\n"
+        f"単なる間違いではなく、専門家でも一瞬迷うような、実務で陥りやすい不完全な選択肢を3つ作成してください。\n\n"
+        f"【出力フォーマット】\n"
+        f"必ず以下のJSONフォーマットのみを出力してください。Markdownのコードブロック(```json ... ```)は付けないでください。\n"
+        "{\n"
+        '  "question": "問題文をここに記述",\n'
+        '  "correct": "正解の選択肢をここに記述",\n'
+        '  "wrong1": "誤答1をここに記述",\n'
+        '  "wrong2": "誤答2をここに記述",\n'
+        '  "wrong3": "誤答3をここに記述"\n'
+        "}"
+    )
+
+    try:
+        resp = _call_gemini(prompt, api_key)
+        # Markdownのコードブロックや余計な会話文を取り除き、最初の'{'から最後の'}'までを抽出
+        match = re.search(r'\{.*\}', resp, re.DOTALL)
+        if match:
+            clean_resp = match.group(0)
+            return json.loads(clean_resp)
+        else:
+            st.error("AIの生成結果からJSONを抽出できませんでした。")
+            return None
+    except json.JSONDecodeError as e:
+        st.error(f"AIの生成データの形式(JSON)に誤りがありました: {e}")
+        return None
+    except Exception as e:
+        st.error(f"問題生成に失敗しました: {e}")
+        return None
+
+def append_quiz_to_sheet(quiz_data: dict) -> bool:
+    try:
+        url = st.session_state.get("current_deck_url") or st.secrets.get("spreadsheet_url")
+        if not url:
+            return False
+            
+        scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+        creds_dict = dict(st.secrets["gcp_service_account"])
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
+        client = gspread.authorize(creds)
+        sh = client.open_by_url(url)
+        worksheet = sh.sheet1
+        
+        # A, B, C, D, E列に追記
+        row_data = [
+            quiz_data["question"],
+            quiz_data["correct"],
+            quiz_data["wrong1"],
+            quiz_data["wrong2"],
+            quiz_data["wrong3"]
+        ]
+        worksheet.append_row(row_data)
+        
+        # Google Sheetsへの追記後にキャッシュをクリアする
+        st.cache_data.clear()
+        return True
+    except Exception as e:
+        if "403" in str(e):
+            client_email = st.secrets.get("gcp_service_account", {}).get("client_email", "不明")
+            st.error(f"⚠️ スプレッドシートの権限エラー (403)\\n\\nこの機能を使うには、スプレッドシートの画面右上の「共有」ボタンから、以下のメールアドレスを「編集者」として追加してください：\\n\\n`{client_email}`")
+        else:
+            st.error(f"スプレッドシートへの追記に失敗しました: {e}")
+        return False
 
 
 def ai_generate_keywords(front: str) -> list[str]:
@@ -1017,8 +1111,24 @@ def filter_and_slice_data(data: list[dict], limit_str: str, filter_mastered: boo
         
         # クイズ・フラッシュカードの状態もリセット（データが変わったため）
         st.session_state.quiz_pool = None
-        st.session_state.quiz_question = None
-        st.session_state.quiz_finished = False
+        
+        if "next_forced_quiz" in st.session_state:
+            fq = st.session_state.pop("next_forced_quiz")
+            st.session_state.quiz_question = {
+                "front": fq["question"],
+                "back": fq["correct"],
+                "wrong_choices": [fq["wrong1"], fq["wrong2"], fq["wrong3"]]
+            }
+            options = [fq["correct"], fq["wrong1"], fq["wrong2"], fq["wrong3"]]
+            random.shuffle(options)
+            st.session_state.quiz_options = options
+            st.session_state.quiz_answered = False
+            st.session_state.quiz_correct = False
+            st.session_state.quiz_finished = False
+        else:
+            st.session_state.quiz_question = None
+            st.session_state.quiz_finished = False
+            
         st.session_state.quiz_total = 0
         st.session_state.quiz_score = 0
         
@@ -1348,6 +1458,36 @@ def quiz_mode(data: list[dict]):
 
             # 3. 図解の結果
             show_result_with_save_buttons(f"ai_diagram_{q['front']}", "テキスト図解", "📊")
+
+            # --- AI自動生成セクション ---
+            st.divider()
+            st.markdown("#### 🪄 次の問題をAIで生成")
+            st.caption(f"現在の用語リストからランダムで新しい問題を作り、スプレッドシート({TARGET_SHEET_NAME})に自動追記して次へ進みます。")
+            
+            c_f, c_c = st.columns(2)
+            with c_f:
+                if st.button("👨‍🏫 ファインマン・モード", help="中学生に説明する比喩を問う問題を作ります", use_container_width=True):
+                    with st.spinner("AIがファインマン・モードで問題を生成・登録中..."):
+                        quiz_data = ai_generate_new_quiz("feynman", data, TARGET_SHEET_NAME)
+                        if quiz_data and append_quiz_to_sheet(quiz_data):
+                            st.success("問題を生成・登録しました！")
+                            # 新しいクイズ問題を強制セットする予約
+                            st.session_state.next_forced_quiz = quiz_data
+                            st.cache_data.clear()
+                            time.sleep(1)
+                            st.rerun()
+            with c_c:
+                if st.button("👔 クライアント・モード", help="実務での例外や必要性を問う問題を作ります", use_container_width=True):
+                    with st.spinner("AIがクライアント・モードで問題を生成・登録中..."):
+                        quiz_data = ai_generate_new_quiz("client", data, TARGET_SHEET_NAME)
+                        if quiz_data and append_quiz_to_sheet(quiz_data):
+                            st.success("問題を生成・登録しました！")
+                            # 新しいクイズ問題を強制セットする予約
+                            st.session_state.next_forced_quiz = quiz_data
+                            st.cache_data.clear()
+                            time.sleep(1)
+                            st.rerun()
+
         # 6. AI機能の警告表示 (Gemini未設定時など)
         if not (GEMINI_AVAILABLE and gemini_api_key):
             if not GEMINI_AVAILABLE:
