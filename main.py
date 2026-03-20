@@ -805,18 +805,32 @@ def ai_generate_diagram(front: str, back: str) -> str:
         return ""
 
 
-def ai_generate_new_quiz(mode: str, data: list[dict], target_sheet_name: str) -> dict | None:
+def get_current_sheet_title() -> str:
+    """現在のスプレッドシートのタイトル（ファイル名）を取得する"""
+    if "current_sheet_title" in st.session_state:
+        return st.session_state.current_sheet_title
+    
+    try:
+        url = st.session_state.get("current_deck_url") or st.secrets.get("spreadsheet_url")
+        if not url:
+            return "専門分野"
+        scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+        creds_dict = dict(st.secrets["gcp_service_account"])
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
+        client = gspread.authorize(creds)
+        sh = client.open_by_url(url)
+        st.session_state.current_sheet_title = sh.title
+        return sh.title
+    except Exception:
+        return "専門分野"
+
+def ai_generate_new_quiz(mode: str, question_item: dict, target_sheet_name: str) -> dict | None:
     api_key = st.secrets.get("gemini_api_key", "")
     if not api_key:
         return None
         
-    if not data:
-        return None
-        
-    # 既存データからランダムに1つの「用語 (front)」と「定義 (back)」を選択
-    source = random.choice(data)
-    term = source["front"]
-    definition = source["back"]
+    term = question_item["front"]
+    definition = question_item["back"]
 
     if mode == "feynman":
         prompt = (
@@ -1461,14 +1475,15 @@ def quiz_mode(data: list[dict]):
 
             # --- AI自動生成セクション ---
             st.divider()
-            st.markdown("#### 🪄 次の問題をAIで生成")
-            st.caption(f"現在の用語リストからランダムで新しい問題を作り、スプレッドシート({TARGET_SHEET_NAME})に自動追記して次へ進みます。")
+            st.markdown("#### 🪄 この問題からAIで新しく生成")
+            st.caption(f"現在の「{q['front']}」について新しい問題を作り、スプレッドシートに自動追記して次へ進みます。")
             
             c_f, c_c = st.columns(2)
             with c_f:
                 if st.button("👨‍🏫 ファインマン・モード", help="中学生に説明する比喩を問う問題を作ります", use_container_width=True):
                     with st.spinner("AIがファインマン・モードで問題を生成・登録中..."):
-                        quiz_data = ai_generate_new_quiz("feynman", data, TARGET_SHEET_NAME)
+                        sheet_title = get_current_sheet_title()
+                        quiz_data = ai_generate_new_quiz("feynman", q, sheet_title)
                         if quiz_data and append_quiz_to_sheet(quiz_data):
                             st.success("問題を生成・登録しました！")
                             # 新しいクイズ問題を強制セットする予約
@@ -1479,7 +1494,8 @@ def quiz_mode(data: list[dict]):
             with c_c:
                 if st.button("👔 クライアント・モード", help="実務での例外や必要性を問う問題を作ります", use_container_width=True):
                     with st.spinner("AIがクライアント・モードで問題を生成・登録中..."):
-                        quiz_data = ai_generate_new_quiz("client", data, TARGET_SHEET_NAME)
+                        sheet_title = get_current_sheet_title()
+                        quiz_data = ai_generate_new_quiz("client", q, sheet_title)
                         if quiz_data and append_quiz_to_sheet(quiz_data):
                             st.success("問題を生成・登録しました！")
                             # 新しいクイズ問題を強制セットする予約
