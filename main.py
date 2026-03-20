@@ -836,7 +836,8 @@ def ai_generate_new_quiz(mode: str, question_item: dict, target_sheet_name: str)
         prompt = (
             f"あなたは『{target_sheet_name}』のシニアエキスパートです。\n"
             f"以下の用語と定義に基づいて新しい4択クイズを作成してください。\n"
-            f"「中学生に説明する場合、どの比喩が最も本質を突いているか？」という切り口で問題を作成してください。\n"
+            f"専門外のクライアントにも直感的に理解できるよう、知的で分かりやすい「ビジネスや日常シーンの秀逸な比喩表現」を交えた切り口で問題文と正解を作成してください。\n"
+            f"幼稚な表現（中学生向けなど）は避け、実務イメージが湧くような説得力のある問題にしてください。\n"
         )
     else: # client
         prompt = (
@@ -1139,13 +1140,14 @@ def filter_and_slice_data(data: list[dict], limit_str: str, filter_mastered: boo
             st.session_state.quiz_answered = False
             st.session_state.quiz_correct = False
             st.session_state.quiz_finished = False
+            # 生成によるリロード時はスコアをリセットせず維持する
         else:
             st.session_state.quiz_question = None
             st.session_state.quiz_finished = False
+            # 通常のリセット時のみスコアを0に戻す
+            st.session_state.quiz_total = 0
+            st.session_state.quiz_score = 0
             
-        st.session_state.quiz_total = 0
-        st.session_state.quiz_score = 0
-        
         st.session_state.fc_index = 0
         st.session_state.fc_flipped = False
         st.session_state.fc_order = []
