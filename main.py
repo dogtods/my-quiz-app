@@ -832,34 +832,26 @@ def ai_generate_new_quiz(mode: str, question_item: dict, target_sheet_name: str)
     term = question_item["front"]
     definition = question_item["back"]
 
-    if mode == "feynman":
-        prompt = (
-            f"あなたは『{target_sheet_name}』のシニアエキスパートです。\n"
-            f"以下の用語と定義に基づいて新しい4択クイズを作成してください。\n"
-            f"専門外のクライアントにも直感的に理解できるよう、知的で分かりやすい「ビジネスや日常シーンの秀逸な比喩表現」を交えた切り口で問題文と正解を作成してください。\n"
-            f"幼稚な表現（中学生向けなど）は避け、実務イメージが湧くような説得力のある問題にしてください。\n"
-        )
-    else: # client
-        prompt = (
-            f"あなたは『{target_sheet_name}』のシニアエキスパートです。\n"
-            f"以下の用語と定義に基づいて新しい4択クイズを作成してください。\n"
-            f"クライアントからの「なぜ必要か？」「どう使うか？」という質問への回答、または「適用できない例外ケース」を問う、実務上の信頼を勝ち取るための実践的な問題を作成してください。\n"
-        )
+    # --- モード別の切り口（1行で本質を伝える） ---
+    mode_instructions = {
+        "feynman": "切り口：実務で通じるビジネス比喩を用いて概念の本質を問え。幼稚な例えは禁止。",
+        "client": "切り口：顧客の「なぜ必要？どう使う？」に答える形、または適用不可の例外を問え。",
+        "objection": "切り口：顧客が『他社でも同じことを言われた』と反論した場面。この概念で関心を奪い返す最も鋭い問い返しを選ばせよ。",
+        "context_switch": "切り口：担当者には定義通りに説明し納得を得た。次にROI重視のCFOへ伝える際、強調の優先順位をどう組み替えるかを問え。",
+        "pre_mortem": "切り口：この概念を盲信して提案し大失注した。見落とした『制約条件』は何かを問え。",
+    }
 
-    prompt += (
-        f"【元の用語】: {term}\n"
-        f"【元の定義】: {definition}\n\n"
-        f"【誤答の条件】\n"
-        f"単なる間違いではなく、専門家でも一瞬迷うような、実務で陥りやすい不完全な選択肢を3つ作成してください。\n\n"
-        f"【出力フォーマット】\n"
-        f"必ず以下のJSONフォーマットのみを出力してください。Markdownのコードブロック(```json ... ```)は付けないでください。\n"
-        "{\n"
-        '  "question": "問題文をここに記述",\n'
-        '  "correct": "正解の選択肢をここに記述",\n'
-        '  "wrong1": "誤答1をここに記述",\n'
-        '  "wrong2": "誤答2をここに記述",\n'
-        '  "wrong3": "誤答3をここに記述"\n'
-        "}"
+    prompt = (
+        f"『{target_sheet_name}』の営業トレーナーとして4択クイズを1問作成せよ。\n"
+        f"用語: {term}\n定義: {definition}\n\n"
+        f"【厳守】全ての選択肢・解説・ヒントは上記の用語と定義のみに基づけ。定義に記載されていない事実・数値・固有名詞は一切作らないこと。\n\n"
+        f"{mode_instructions.get(mode, mode_instructions['client'])}\n\n"
+        f"条件:\n"
+        f"- 誤答3つは専門家も一瞬迷う実務的な罠にせよ（ただし定義に基づく範囲内で）\n"
+        f"- hint: 用語の核心メリットを20字以内で\n"
+        f"- explanation: 正解が信頼を勝ち取る理由を心理学的根拠と共に記載\n\n"
+        f"JSON以外出力禁止。```不要。\n"
+        '{"question":"","correct":"","wrong1":"","wrong2":"","wrong3":"","hint":"","explanation":""}'
     )
 
     try:
@@ -898,7 +890,9 @@ def append_quiz_to_sheet(quiz_data: dict) -> bool:
             quiz_data["correct"],
             quiz_data["wrong1"],
             quiz_data["wrong2"],
-            quiz_data["wrong3"]
+            quiz_data["wrong3"],
+            quiz_data.get("explanation", ""),
+            quiz_data.get("hint", "")
         ]
         worksheet.append_row(row_data)
         
@@ -1132,7 +1126,9 @@ def filter_and_slice_data(data: list[dict], limit_str: str, filter_mastered: boo
             st.session_state.quiz_question = {
                 "front": fq["question"],
                 "back": fq["correct"],
-                "wrong_choices": [fq["wrong1"], fq["wrong2"], fq["wrong3"]]
+                "wrong_choices": [fq["wrong1"], fq["wrong2"], fq["wrong3"]],
+                "explanation": fq.get("explanation", ""),
+                "notes": fq.get("hint", "")
             }
             options = [fq["correct"], fq["wrong1"], fq["wrong2"], fq["wrong3"]]
             random.shuffle(options)
@@ -1270,14 +1266,17 @@ def quiz_mode(data: list[dict]):
 
     # 未回答時のみ、上部に問題を表示（スコアは表示しない）
     if not st.session_state.quiz_answered:
-
         st.markdown(
             f'<div class="{status_class}" style="text-align:center; padding:24px; '
-            f'border-radius:16px; margin:16px 0; background-color: #ffffff;">'
+            f'border-radius:16px; margin:16px 0; background-color: #ffffff; border: 1px solid #eee;">'
             f'<span style="font-size: clamp(1.2rem, 4vw, 2rem); font-weight:700; color: black;">{q["front"]}</span>'
             f'</div>',
             unsafe_allow_html=True,
         )
+        # ヒントの表示 (Notes/7列目にヒントが格納されている想定)
+        hint_text = q.get("notes", "")
+        if hint_text:
+            st.info(f"💡 ヒント: {hint_text}")
 
     # 回答済みなら結果表示
     if st.session_state.quiz_answered:
@@ -1482,25 +1481,58 @@ def quiz_mode(data: list[dict]):
             
             c_f, c_c = st.columns(2)
             with c_f:
-                if st.button("👨‍🏫 ファインマン・モード", help="説明を問う問題を作ります", use_container_width=True):
-                    with st.spinner("AIがファインマン・モードで問題を生成・登録中..."):
+                if st.button("👨‍🏫 ファインマン", help="説明を問う問題を作ります", use_container_width=True):
+                    with st.spinner("生成中..."):
                         sheet_title = get_current_sheet_title()
                         quiz_data = ai_generate_new_quiz("feynman", q, sheet_title)
                         if quiz_data and append_quiz_to_sheet(quiz_data):
-                            st.success("問題を生成・登録しました！")
-                            # 新しいクイズ問題を強制セットする予約
+                            st.success("登録しました！")
                             st.session_state.next_forced_quiz = quiz_data
                             st.cache_data.clear()
                             time.sleep(1)
                             st.rerun()
             with c_c:
-                if st.button("👔 クライアント・モード", help="例外や必要性を問う問題を作ります", use_container_width=True):
-                    with st.spinner("AIがクライアント・モードで問題を生成・登録中..."):
+                if st.button("👔 クライアント", help="例外や必要性を問う問題を作ります", use_container_width=True):
+                    with st.spinner("生成中..."):
                         sheet_title = get_current_sheet_title()
                         quiz_data = ai_generate_new_quiz("client", q, sheet_title)
                         if quiz_data and append_quiz_to_sheet(quiz_data):
-                            st.success("問題を生成・登録しました！")
-                            # 新しいクイズ問題を強制セットする予約
+                            st.success("登録しました！")
+                            st.session_state.next_forced_quiz = quiz_data
+                            st.cache_data.clear()
+                            time.sleep(1)
+                            st.rerun()
+
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                if st.button("⚔️ 反論処理", help="NOや疑念への切り返しを問う", use_container_width=True):
+                    with st.spinner("生成中..."):
+                        sheet_title = get_current_sheet_title()
+                        quiz_data = ai_generate_new_quiz("objection", q, sheet_title)
+                        if quiz_data and append_quiz_to_sheet(quiz_data):
+                            st.success("登録しました！")
+                            st.session_state.next_forced_quiz = quiz_data
+                            st.cache_data.clear()
+                            time.sleep(1)
+                            st.rerun()
+            with c2:
+                if st.button("🔄 コンテキスト", help="相手に応じた使い分けを問う", use_container_width=True):
+                    with st.spinner("生成中..."):
+                        sheet_title = get_current_sheet_title()
+                        quiz_data = ai_generate_new_quiz("context_switch", q, sheet_title)
+                        if quiz_data and append_quiz_to_sheet(quiz_data):
+                            st.success("登録しました！")
+                            st.session_state.next_forced_quiz = quiz_data
+                            st.cache_data.clear()
+                            time.sleep(1)
+                            st.rerun()
+            with c3:
+                if st.button("📉 失敗逆算", help="誤用や見落としのリスクを問う", use_container_width=True):
+                    with st.spinner("生成中..."):
+                        sheet_title = get_current_sheet_title()
+                        quiz_data = ai_generate_new_quiz("pre_mortem", q, sheet_title)
+                        if quiz_data and append_quiz_to_sheet(quiz_data):
+                            st.success("登録しました！")
                             st.session_state.next_forced_quiz = quiz_data
                             st.cache_data.clear()
                             time.sleep(1)
