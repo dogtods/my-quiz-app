@@ -468,8 +468,6 @@ def flashcard_mode(data: list[dict]):
             st.session_state.fc_flipped = False
             st.session_state._ls_counter += 1
             st.rerun()
-            
-             
     st.caption(f"進捗: {st.session_state.fc_index + 1} / {len(data)}")
 
     # 中断して保存ボタン
@@ -691,6 +689,31 @@ def save_explanation_to_sheet(front: str, explanation: str):
         return False
 
 
+def append_mission_to_sheet(term: str, target: str, user_answer: str, score: str):
+    """強化モード（実践ミッション）の結果を専用シートに追記する。"""
+    try:
+        url = st.session_state.get("current_deck_url") or st.secrets.get("spreadsheet_url")
+        if not url:
+            return False
+        scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+        creds_dict = dict(st.secrets["gcp_service_account"])
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
+        client = gspread.authorize(creds)
+        sh = client.open_by_url(url)
+        
+        try:
+            worksheet = sh.worksheet("強化モード")
+        except gspread.WorksheetNotFound:
+            worksheet = sh.add_worksheet(title="強化モード", rows=1000, cols=4)
+            worksheet.append_row(["用語", "ミッション/シーン", "自分の回答", "採点・フィードバック"])
+            
+        worksheet.append_row([term, target, user_answer, score])
+        return True
+    except Exception as e:
+        st.error(f"強化モードの保存に失敗しました: {e}")
+        return False
+
+
 def _call_gemini(prompt: str, api_key: str) -> str:
     """Gemini REST APIを共通呼び出し関数（リトライ処理付き）。"""
     url = (
@@ -805,6 +828,98 @@ def ai_generate_diagram(front: str, back: str) -> str:
         return ""
 
 
+def ai_generate_single_mission(term: str, definition: str, level: str = "基本") -> dict | None:
+    """1つの用語に対して、実践的なアウトプット記述ミッションを生成する。"""
+    api_key = st.secrets.get("gemini_api_key", "")
+    if not api_key:
+        return None
+    try:
+        if level == "中級":
+            products = [
+                "SpreadSheetの名前", "精密測定器", "SaaS型在庫管理システム", 
+                "産業用廃棄物処理", "温暖化対策課（官公庁向け）", "環境規制対策課（官公庁向け）"
+            ]
+            personas = [
+                "技術に疎い工場長", "コストにシビアなCFO", "理論武装した若手エンジニア"
+            ]
+            situations = [
+                "納品物が仕様と1%ズレていた", "競合他社が半額を提示してきた", 
+                "商品の必要性が不明と言われた", "納期が早まった"
+            ]
+            
+            product = random.choice(products)
+            persona = random.choice(personas)
+            situation = random.choice(situations)
+            
+            scene = f"商材: {product}\n相手（ペルソナ）: {persona}\n状況: {situation}"
+            
+            prompt = (
+                f"あなたはシニア営業エキスパートです。以下の用語と、指定された状況を使って、学習者が実践的な『アウトプット（文章作成）練習』をするためのミッションを作成してください。\n\n"
+                f"用語: {term}\n"
+                f"定義: {definition}\n\n"
+                f"【設定シーン】\n{scene}\n\n"
+                "【出力指示】\n"
+                "このシーンにおいて、上記の用語を適切に盛り込んだ営業文を作成するよう指示してください。\n"
+                "※厳守事項：「トラブル」などの抽象的で曖昧な表現は禁止し、必ず上記の具体的な状況（納品物のズレ、競合の半額提示など）に基づいた具体的な指示文を作成してください。\n"
+                "JSON形式のみで出力してください。Markdown不要。\n"
+                '{"scene": "シーンの説明（上記のシーン設定をそのままで記載して良いですが、改行等を整えて自然に表現してください）", "mission": "具体的な指示文"}'
+            )
+        else:
+            scenes = [
+                "役員へのクロージングメール（予算承認を得る）",
+                "トラブル謝罪後のフォローアップ提案",
+                "競合比較をしている担当者への納得感を高める返信",
+                "初回商談後のネクストステップ合意狙いの議事録メール",
+                "既存顧客への新機能追加（アップセル）提案",
+            ]
+            scene = random.choice(scenes)
+            prompt = (
+                f"あなたはシニア営業エキスパートです。以下の用語を使って、学習者が実践的な『アウトプット（文章作成）練習』をするためのミッションを作成してください。\n\n"
+                f"用語: {term}\n"
+                f"定義: {definition}\n\n"
+                f"【設定シーン】\n{scene}\n\n"
+                "【出力指示】\n"
+                "このシーンにおいて、上記の用語を適切に盛り込んだ営業文を作成するよう指示してください。"
+                "JSON形式のみで出力してください。Markdown不要。\n"
+                '{"scene": "シーンの説明", "mission": "具体的な指示文"}'
+            )
+        resp = _call_gemini(prompt, api_key)
+        m = re.search(r'\{.*\}', resp, re.DOTALL)
+        if m:
+            return json.loads(m.group(0))
+        return None
+    except Exception:
+        return None
+
+
+def ai_score_single_mission(scene: str, term: str, user_answer: str) -> dict | None:
+    """受講者の回答を採点・フィードバックする。"""
+    api_key = st.secrets.get("gemini_api_key", "")
+    if not api_key:
+        return None
+    try:
+        score_prompt = (
+            f"あなたはシニア営業エキスパートです。以下の記述回答を採点してください。\n\n"
+            f"【営業シーン】{scene}\n"
+            f"【使用必須用語】{term}\n"
+            f"【受験者の回答】\n{user_answer}\n\n"
+            "以下の3軸で各0-33点（合計100点満点）で採点し、アドバイスを日本語で記述してください:\n"
+            "1. ペルソナ適合性: 相手の役職、状況に配慮した表現か\n"
+            "2. アクション誘導: 次の商談ステップを促せているか\n"
+            "3. 知識精度: 用語が文脈の中で正しく、効果的に運用されているか\n\n"
+            "最後に「模範解答」として、プロならこう書くという理想の回答例を示してください。\n\n"
+            "出力形式（JSONのみ）:\n"
+            '{"persona_score":0,"persona_feedback":"","action_score":0,"action_feedback":"","knowledge_score":0,"knowledge_feedback":"","total":0,"model_answer":""}'
+        )
+        resp = _call_gemini(score_prompt, api_key)
+        m = re.search(r'\{.*\}', resp, re.DOTALL)
+        if m:
+            return json.loads(m.group(0))
+        return None
+    except Exception:
+        return None
+
+
 def get_current_sheet_title() -> str:
     """現在のスプレッドシートのタイトル（ファイル名）を取得する"""
     if "current_sheet_title" in st.session_state:
@@ -825,32 +940,75 @@ def get_current_sheet_title() -> str:
         return "専門分野"
 
 def ai_generate_new_quiz(mode: str, question_item: dict, target_sheet_name: str) -> dict | None:
+    """強化版：営業プレッシャー・誤答キャラ設計を含む問題を生成する。"""
     api_key = st.secrets.get("gemini_api_key", "")
     if not api_key:
         return None
-        
+
     term = question_item["front"]
     definition = question_item["back"]
 
-    # --- モード別の切り口（1行で本質を伝える） ---
+    # 営業現場の心理的プレッシャー要素（ランダムに1つ選択して必ず問題文に含める）
+    pressure_elements = [
+        "競合他社が前日に低価格で同様の提案を入れてきた場面で",
+        "決裁権者が不在で担当者だけとの面談になった状況下で",
+        "顧客が明らかに不機嫌で「5分で話してくれ」と言っている場面で",
+        "上司から今月末までの受注を厳命されているプレッシャー下で",
+        "先週の提案が刺さらず顧客との信頼関係が揺らいでいる状況で",
+        "顧客が「もう内製化しようと思っている」と言い出した場面で",
+    ]
+    pressure = random.choice(pressure_elements)
+
+    # モード別の指示
     mode_instructions = {
-        "feynman": "切り口：実務で通じるビジネス比喩を用いて概念の本質を問え。幼稚な例えは禁止。",
-        "client": "切り口：顧客の「なぜ必要？どう使う？」に答える形、または適用不可の例外を問え。",
-        "objection": "切り口：顧客が『他社でも同じことを言われた』と反論した場面。この概念で関心を奪い返す最も鋭い問い返しを選ばせよ。",
-        "context_switch": "切り口：担当者には定義通りに説明し納得を得た。次にROI重視のCFOへ伝える際、強調の優先順位をどう組み替えるかを問え。",
-        "pre_mortem": "切り口：この概念を盲信して提案し大失注した。見落とした『制約条件』は何かを問え。",
+        "feynman": (
+            f"【Feynmanモード】{pressure}、"
+            "中学生でも理解できる「日常の比喩」を使って概念の本質を説明しようとしている。"
+            "どの比喩が最もこの概念の構造を正確に表し、且つ顧客の心を開くかを問え。"
+        ),
+        "client": (
+            f"【Clientモード】{pressure}、"
+            "顧客から「それって本当にウチに必要ですか？他でも同じことを言われたんですが」という"
+            "反論(Objection)が飛んできた。この概念を使い、例外ケースや注意点を踏まえた上で、"
+            "信頼を勝ち取るための『最善の判断・回答』はどれかを問え。"
+        ),
+        "objection": (
+            f"【反論処理モード】{pressure}、"
+            "顧客が「他社でも同じことを言われた、差がわからない」と反論した場面。"
+            "この概念を起点に関心を奪い返す最も鋭い問い返しを選ばせよ。"
+        ),
+        "context_switch": (
+            f"【コンテキスト切り替え】{pressure}、"
+            "担当者には定義通りに説明し納得を得た。次にROI重視のCFOへ伝える際、"
+            "強調の優先順位をどう組み替えるかを問え。"
+        ),
+        "pre_mortem": (
+            f"【失敗逆算】{pressure}、"
+            "この概念を盲信して提案した結果、6ヶ月後に大失注した。"
+            "失敗の原因となった『見落としていた制約条件・例外・落とし穴』は何かを問え。"
+        ),
     }
 
+    mode_instruction = mode_instructions.get(mode, mode_instructions["client"])
+
     prompt = (
-        f"『{target_sheet_name}』の営業トレーナーとして4択クイズを1問作成せよ。\n"
-        f"用語: {term}\n定義: {definition}\n\n"
-        f"【厳守】全ての選択肢・解説・ヒントは上記の用語と定義のみに基づけ。定義に記載されていない事実・数値・固有名詞は一切作らないこと。\n\n"
-        f"{mode_instructions.get(mode, mode_instructions['client'])}\n\n"
-        f"条件:\n"
-        f"- 誤答3つは専門家も一瞬迷う実務的な罠にせよ（ただし定義に基づく範囲内で）\n"
-        f"- hint: 用語の核心メリットを20字以内で\n"
-        f"- explanation: 正解が信頼を勝ち取る理由を心理学的根拠と共に記載\n\n"
-        f"JSON以外出力禁止。```不要。\n"
+        f"あなたは『{target_sheet_name}』における道20年のシニアエキスパート兼"
+        "営業イネーブルメント・マネージャーです。\n"
+        f"以下の用語と定義に基づき、4択クイズを1問作成してください。\n\n"
+        f"用語: {term}\n"
+        f"定義: {definition}\n\n"
+        "【問題生成の指示】\n"
+        f"{mode_instruction}\n\n"
+        "【誤答の設計原則（必ず守ること）】\n"
+        "- 誤答1(wrong1): 内容は正しいが「空気が読めていない」回答（場の雰囲気・相手の感情を無視）\n"
+        "- 誤答2(wrong2): 「主導権を相手に渡してしまう」回答（顧客のペースに乗る・確認過多）\n"
+        "- 誤答3(wrong3): 「専門用語の羅列」で相手が思考停止する回答\n\n"
+        "【厳守事項】\n"
+        "- 全選択肢・解説は上記の用語と定義のみに基づくこと\n"
+        "- 定義に記載されていない事実・数値・固有名詞は作らないこと\n"
+        "- 解説はなぜその回答が信頼獲得につながるか、心理・営業論理の根拠を含めること\n"
+        "- 問題文は『一つに絞った明確な問い』にすること。「A、またはBはどれか」といった二義的・矛盾する問い方は厳禁とする。\n\n"
+        "JSON以外出力禁止。```は不要。以下の形式で出力:\n"
         '{"question":"","correct":"","wrong1":"","wrong2":"","wrong3":"","hint":"","explanation":""}'
     )
 
@@ -1069,6 +1227,9 @@ def init_session_state():
         st.session_state.match_elapsed = 0
         st.session_state.match_attempts = 0
 
+        # アウトプット・ミッション用
+        st.session_state.synthesis_active = False  # 互換性のために残す（既存のコードが参照する可能性があるため）
+
     if "pending_history" not in st.session_state:
         st.session_state.pending_history = []
 
@@ -1202,6 +1363,93 @@ def generate_quiz(data: list[dict]):
     st.session_state.quiz_correct = False
 
 
+
+
+def render_single_mission(term_item: dict, level: str = "基本"):
+    """1問ごとの『実践ミッション』UIを表示する。"""
+    st.divider()
+    st.markdown(f"### ✍️ 実践アウトプット・ミッション ({level})")
+    api_key = st.secrets.get("gemini_api_key", "")
+    
+    term = term_item["front"]
+    definition = term_item["back"]
+    state_key = f"mission_{term}_{level}"
+
+    # ミッション生成
+    if state_key not in st.session_state:
+        with st.spinner(f"AIがミッションを作成中... ({level})"):
+            mission_data = ai_generate_single_mission(term, definition, level=level)
+            if mission_data:
+                st.session_state[state_key] = mission_data
+            else:
+                st.write("ミッションの生成に失敗しました。")
+                return
+
+    mission = st.session_state[state_key]
+    
+    st.markdown(f"""<div style="background:#fff8e7;border-left:4px solid #f5a623;
+    padding:16px;border-radius:12px;margin:12px 0;">
+    <p style="margin:0 0 8px;font-weight:700;color:#333;">📋 シーン設定</p>
+    <p style="margin:0;font-size:1.05rem;color:#111;white-space:pre-wrap;">{mission.get('scene', '')}</p>
+    </div>""", unsafe_allow_html=True)
+    
+    st.info(f"**ミッション:** {mission.get('mission', '')}")
+    
+    # 入力と採点
+    result_key = f"mission_result_{term}_{level}"
+    if result_key not in st.session_state:
+        user_text = st.text_area("✍️ あなたの回答", height=150, key=f"ans_{term}", 
+                                  placeholder=f"「{term}」を使って文章を書いてください...")
+        if st.button("📤 採点してもらう", key=f"score_{term}", use_container_width=True, type="primary"):
+            if not user_text.strip():
+                st.warning("回答を入力してください。")
+            elif not api_key:
+                st.error("APIキーがありません。")
+            else:
+                with st.spinner("シニアエキスパートが採点中..."):
+                    result = ai_score_single_mission(mission['scene'], term, user_text)
+                    if result:
+                        st.session_state[result_key] = result
+                        # シートへ保存
+                        mission_text = f"【シーン】\n{mission.get('scene', '')}\n\n【指示】\n{mission.get('mission', '')}"
+                        score_text = (
+                            f"総合: {result.get('total', 0)}点\n"
+                            f"ペルソナ: {result.get('persona_score', 0)}\n"
+                            f"誘導: {result.get('action_score', 0)}\n"
+                            f"正確性: {result.get('knowledge_score', 0)}\n\n"
+                            f"【アドバイス】\n"
+                            f"{result.get('persona_feedback', '')}\n"
+                            f"{result.get('action_feedback', '')}\n"
+                            f"{result.get('knowledge_feedback', '')}\n\n"
+                            f"【模範解答】\n"
+                            f"{result.get('model_answer', '')}"
+                        )
+                        append_mission_to_sheet(term, mission_text, user_text, score_text)
+                        st.rerun()
+    else:
+        result = st.session_state[result_key]
+        total = result.get("total", 0)
+        color = "#27ae60" if total >= 70 else "#e67e22" if total >= 50 else "#e74c3c"
+        st.markdown(f"""<div style="background:{color};color:white;padding:16px;
+        border-radius:16px;text-align:center;margin:12px 0;">
+        <h3 style="margin:0;">{total}点</h3>
+        </div>""", unsafe_allow_html=True)
+        
+        c1, c2, c3 = st.columns(3)
+        c1.caption(f"ペルソナ: {result.get('persona_score',0)}")
+        c2.caption(f"誘導: {result.get('action_score',0)}")
+        c3.caption(f"正確性: {result.get('knowledge_score',0)}")
+        
+        with st.expander("📝 フィードバック詳細と模範解答を見る", expanded=True):
+            st.markdown(f"**アドバイス:**\n{result.get('persona_feedback','')}\n{result.get('action_feedback','')}\n{result.get('knowledge_feedback','')}")
+            st.markdown("---")
+            st.markdown(f"**🏆 模範解答:**\n{result.get('model_answer','')}")
+            
+        if st.button("🗑️ ミッションをやり直す", key=f"retry_{term}_{level}"):
+            del st.session_state[result_key]
+            st.rerun()
+
+
 def quiz_mode(data: list[dict]):
     """4択クイズの表示・ロジック。"""
     # 全問終了時の画面
@@ -1299,9 +1547,18 @@ def quiz_mode(data: list[dict]):
                 unsafe_allow_html=True,
             )
 
-        # 2. 解説があれば表示
+        # 2. 解説があれば目立つカード形式で表示
         if "explanation" in q and q["explanation"]:
-            st.info(f"💡 解説: {q['explanation']}")
+            st.markdown(
+                f"""<div style="background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+                color: #e0e0e0; padding: 20px; border-radius: 16px; margin: 12px 0;
+                border-left: 4px solid #f5a623; box-shadow: 0 4px 16px rgba(0,0,0,0.3);">
+                <p style="margin:0 0 6px 0; font-size:0.8rem; color:#f5a623; font-weight:700;
+                letter-spacing:0.1em;">💡 論理的解説（シニアエキスパートより）</p>
+                <p style="margin:0; font-size:1rem; line-height:1.7;">{q['explanation']}</p>
+                </div>""",
+                unsafe_allow_html=True
+            )
 
         # 3. 次へボタン
         if st.button("▶️ 次の問題", key="next_q", use_container_width=True):
@@ -1538,6 +1795,17 @@ def quiz_mode(data: list[dict]):
                             time.sleep(1)
                             st.rerun()
 
+            st.divider()
+            c_m1, c_m2 = st.columns(2)
+            with c_m1:
+                if st.button("✍️ 強化モード (基本)", help="現在の用語で実践的な記述ミッションを出題・採点して記録します", use_container_width=True):
+                    st.session_state[f"show_mission_{q['front']}"] = "基本"
+                    st.rerun()
+            with c_m2:
+                if st.button("🔥 強化モード (中級)", help="商材・相手・状況を具体的に指定し、難易度を上げて出題します", use_container_width=True):
+                    st.session_state[f"show_mission_{q['front']}"] = "中級"
+                    st.rerun()
+
         # 6. AI機能の警告表示 (Gemini未設定時など)
         if not (GEMINI_AVAILABLE and gemini_api_key):
             if not GEMINI_AVAILABLE:
@@ -1558,6 +1826,11 @@ def quiz_mode(data: list[dict]):
                 unsafe_allow_html=True,
             )
         
+        # --- 実践ミッション (アウトプット強化モード用) ---
+        mission_level = st.session_state.get(f"show_mission_{q['front']}")
+        if mission_level:
+            render_single_mission(q, level=mission_level)
+
         # 解答済み画面の最後で確実に return する
         return
     
@@ -1787,6 +2060,9 @@ def handle_card_click(idx: int):
             matched.add(idx)
             st.session_state.match_matched = matched
             add_history_record(first_card["pair_key"], True)
+            
+            # 10問カウンター更新を削除（1問ごとに表示するため）
+            pass
         else:
             # ペア不成立 → 両方裏に戻す
             revealed[first_idx] = False
@@ -1920,7 +2196,7 @@ def main():
         #     st.write("secrets.decks", st.secrets.get("decks", "Not Found"))
 
         mode = st.radio("学習モード", ["4択クイズ", "フラッシュカード", "マッチングゲーム", "学習履歴"])
-        
+
         st.divider()
         st.caption("セッション設定")
         
