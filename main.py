@@ -332,6 +332,12 @@ def load_data_by_url(url: str) -> list[dict]:
                 # 7列目があれば「メモ/参考URL」として扱う
                 if len(row) >= 7 and row[6].strip():
                     item["notes"] = row[6].strip()
+                
+                # 8列目があれば「非表示」フラグとして扱う (TRUE, true, 1, などの場合は非表示)
+                if len(row) >= 8 and row[7].strip().lower() in ("true", "1", "hidden", "非表示"):
+                    item["hidden"] = True
+                else:
+                    item["hidden"] = False
 
                 data.append(item)
 
@@ -467,6 +473,13 @@ def flashcard_mode(data: list[dict]):
             st.session_state.fc_index += 1
             st.session_state.fc_flipped = False
             st.session_state._ls_counter += 1
+            st.rerun()
+            
+    # 非表示ボタン
+    if st.button("🗑️ この問題を非表示にする", key="fc_hide", use_container_width=True, help="この問題をスプレッドシート上で非表示に設定し、出題対象から除外します"):
+        if save_hidden_to_sheet(item["front"]):
+            st.success("問題を非表示にしました")
+            time.sleep(1)
             st.rerun()
             
              
@@ -691,13 +704,43 @@ def save_explanation_to_sheet(front: str, explanation: str):
         return False
 
 
+def save_hidden_to_sheet(front: str):
+    """8列目（非表示フラグ）をスプレッドシートに保存する。"""
+    try:
+        url = st.session_state.get("current_deck_url") or st.secrets.get("spreadsheet_url")
+        if not url:
+            return False
+        scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+        creds_dict = dict(st.secrets["gcp_service_account"])
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
+        client = gspread.authorize(creds)
+        sh = client.open_by_url(url)
+        worksheet = sh.sheet1
+        # 対象行を検索
+        cell = worksheet.find(front, in_column=1)
+        if cell:
+            worksheet.update_cell(cell.row, 8, "TRUE")
+            # キャッシュクリア（データの再読み込みを強制）
+            st.cache_data.clear()
+            if "session_cache_key" in st.session_state:
+                del st.session_state.session_cache_key
+            return True
+        return False
+    except Exception as e:
+        st.error(f"非表示設定の保存に失敗しました: {e}")
+        return False
+
+
 def _call_gemini(prompt: str, api_key: str) -> str:
-    """Gemini REST APIを共通呼び出し関数（リトライ処理付き）。"""
+    """Gemini REST APIを共通呼び出し関数（検索連携あり・リトライ処理付き）。"""
     url = (
         "https://generativelanguage.googleapis.com/v1beta/"
         f"models/gemini-flash-lite-latest:generateContent?key={api_key}"
     )
-    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "tools": [{"googleSearch": {}}]
+    }
     
     max_retries = 3
     for i in range(max_retries):
@@ -842,14 +885,15 @@ def ai_generate_new_quiz(mode: str, question_item: dict, target_sheet_name: str)
     }
 
     prompt = (
-        f"『{target_sheet_name}』の営業トレーナーとして4択クイズを1問作成せよ。\n"
+        f"『{target_sheet_name}』の専門トレーナーとして、実戦的な4択クイズを作成せよ。\n"
         f"用語: {term}\n定義: {definition}\n\n"
-        f"【厳守】全ての選択肢・解説・ヒントは上記の用語と定義のみに基づけ。定義に記載されていない事実・数値・固有名詞は一切作らないこと。\n\n"
+        f"【重要】この用語と定義を核としつつ、必要に応じて一般的なビジネス知識や実例を用いて、現実味のある問い（コンテキスト）に補完すること。\n"
+        f"ただし、出題の意図が元の定義から逸脱しないように注意せよ。\n\n"
         f"{mode_instructions.get(mode, mode_instructions['client'])}\n\n"
         f"条件:\n"
-        f"- 誤答3つは専門家も一瞬迷う実務的な罠にせよ（ただし定義に基づく範囲内で）\n"
+        f"- 誤答3つは専門家も一瞬迷う実務的な罠にせよ\n"
         f"- hint: 用語の核心メリットを20字以内で\n"
-        f"- explanation: 正解が信頼を勝ち取る理由を心理学的根拠と共に記載\n\n"
+        f"- explanation: 正解が信頼を勝ち取る理由を心理学的根拠や実例と共に記載\n\n"
         f"JSON以外出力禁止。```不要。\n"
         '{"question":"","correct":"","wrong1":"","wrong2":"","wrong3":"","hint":"","explanation":""}'
     )
@@ -1081,6 +1125,11 @@ def filter_and_slice_data(data: list[dict], limit_str: str, filter_mastered: boo
     if not data:
         return []
 
+    # 0. 非表示フィルター
+    data = [d for d in data if not d.get("hidden", False)]
+    if not data:
+        return []
+
     # 1. 習熟度フィルター
     if filter_mastered:
         # 正解履歴がないもの（未習熟）
@@ -1304,9 +1353,18 @@ def quiz_mode(data: list[dict]):
             st.info(f"💡 解説: {q['explanation']}")
 
         # 3. 次へボタン
-        if st.button("▶️ 次の問題", key="next_q", use_container_width=True):
-            generate_quiz(data)
-            st.rerun()
+        c_next, c_hide = st.columns([2, 1])
+        with c_next:
+            if st.button("▶️ 次の問題", key="next_q", use_container_width=True, type="primary"):
+                generate_quiz(data)
+                st.rerun()
+        with c_hide:
+            if st.button("🗑️ 非表示", key="quiz_hide", use_container_width=True, help="この問題を非表示にして除外します"):
+                if save_hidden_to_sheet(q["front"]):
+                    st.success("非表示にしました")
+                    time.sleep(1)
+                    generate_quiz(data)
+                    st.rerun()
 
         # 4. 問題文 (再掲) - 黒文字に変更
         st.markdown(
