@@ -798,10 +798,10 @@ def ai_generate_notes(front: str, back: str, custom_prompt: str = "") -> str:
             )
         else:
             prompt = (
-                f"以下のクイズの設問と正解を見て、日本語で解説を準備してください。3行程度で簡潔に、初心者でもわかるようにかみ砕いて：\n"
-                f"「なぜこの回答なのか」「認識のポイント」「記憶のコツ」を含めてください。\n\n"
-                f"設問: {front}\n"
-                f"正解: {back}\n"
+                f"以下の用語と定義を核としつつ、必要に応じて一般的なビジネス知識や実例を用いて、初心者にも分かりやすく「なぜこの回答なのか」「認識のポイント」「記憶のコツ」を3行程度で簡潔に、かみ砕いて解説してください。\n"
+                f"ただし、解説の内容が元の定義から逸脱しないように注意すること。\n\n"
+                f"用語: {front}\n"
+                f"定義: {back}\n"
             )
         return _call_gemini(prompt, api_key)
     except Exception as e:
@@ -818,8 +818,9 @@ def ai_explain_options(front: str, back: str, options: list[str]) -> str:
         options_text = "\n".join([f"-  {opt}" for opt in options])
         prompt = (
             f"以下のクイズの全選択肢を見て、各選択肢の意味、正解との違いを日本語で解説してください。\n"
-            f"各選択肢に2行程度で説明してください。\n\n"
-            f"設問: {front}\n"
+            f"この用語と定義を核としつつ、必要に応じて一般的なビジネス知識や実例を用いて、実務上の違いが分かるように各選択肢に2行程度で説明してください。\n"
+            f"ただし、解説の内容が元の定義から逸脱しないように注意すること。\n\n"
+            f"用語: {front}\n"
             f"正解: {back}\n"
             f"選択肢:\n{options_text}\n"
         )
@@ -829,23 +830,7 @@ def ai_explain_options(front: str, back: str, options: list[str]) -> str:
         return ""
 
 
-def ai_generate_diagram(front: str, back: str) -> str:
-    """[Button 3] 設問の概念をテキストベース（ASCII/記号）の図解として生成。"""
-    api_key = st.secrets.get("gemini_api_key", "")
-    if not api_key:
-        return ""
-    try:
-        prompt = (
-            f"以下のクイズの設問と正解から、概念の関係性やプロセスを「テキストベースの図解」として作成してください。\n"
-            f"特殊記号（→, ↴, ┝, ┃, ━, ┌, ┐, └, ┘）やASCII文字を使って、シンプルに文字だけで構造を表現してください。\n"
-            f"画像やコード（Mermaid等）は不要です。文字だけで視覚的にわかる図にしてください。\n\n"
-            f"設問: {front}\n"
-            f"正解: {back}\n"
-        )
-        return _call_gemini(prompt, api_key)
-    except Exception as e:
-        st.error(f"図解の生成に失敗しました: {e}")
-        return ""
+
 
 
 def get_current_sheet_title() -> str:
@@ -952,41 +937,7 @@ def append_quiz_to_sheet(quiz_data: dict) -> bool:
         return False
 
 
-def ai_generate_keywords(front: str) -> list[str]:
-    """Geminiを用いて設問から重要なキーワードを抽出する。"""
-    api_key = st.secrets.get("gemini_api_key", "")
-    if not api_key:
-        return []
-    try:
-        prompt = (
-            f"以下のクイズの設問から、Google検索に役立つ重要なキーワード（専門用語、固有名詞など）を3〜5個抽出してください。"
-            f"結果はカンマ区切りのみの形式で出力してください。\n\n"
-            f"設問: {front}"
-        )
-        resp = _call_gemini(prompt, api_key)
-        # カンマやスペース、改行で分割してリスト化
-        keywords = [k.strip() for k in resp.replace("\n", ",").split(",") if k.strip()]
-        return keywords
-    except Exception:
-        return []
 
-
-def extract_keywords(text: str, n: int = 2) -> list[str]:
-    """設問テキストからキーとなる語を最大n件抽出する（AIなし・コストゼロ）。"""
-    # 句読点・かっこ・助詞パターンで分割
-    parts = re.split(r'[。、,，.．\s　「」『』（）()【】〔〕・…ー\-\+\?？！!：:；;]', text)
-    tokens = [p.strip() for p in parts if len(p.strip()) >= 2]
-    # 「の/は/が/を/に/で/と/も/か/や/へ/から/まで/より/だ/です/ます」等のひらがなのみトークンを除外
-    stop_hiragana = re.compile(r'^[ぁ-ん]{1,3}$')
-    tokens = [t for t in tokens if not stop_hiragana.match(t)]
-    # 重複削除・長さ降順ソートで上位n件
-    seen = set()
-    unique = []
-    for t in sorted(tokens, key=len, reverse=True):
-        if t not in seen:
-            seen.add(t)
-            unique.append(t)
-    return unique[:n]
 
 
 def get_word_status(word: str) -> str | None:
@@ -1394,7 +1345,7 @@ def quiz_mode(data: list[dict]):
             custom_prompt_key = f"custom_prompt_{q['front']}"
             custom_prompt = st.text_input("🤖 AIへの追加の指示・質問（任意）", placeholder="例：〇〇との違いを教えて", key=custom_prompt_key)
 
-            col_btn1, col_btn2, col_btn3 = st.columns(3)
+            col_btn1, col_btn2 = st.columns(2)
             with col_btn1:
                 if st.button("🤖 AI解説", key=f"ai_gen_{q['front']}", use_container_width=True):
                     with st.spinner("AIが解説を生成中..."):
@@ -1411,13 +1362,6 @@ def quiz_mode(data: list[dict]):
                         )
                     if opts_text:
                         st.session_state[f"ai_opts_result_{q['front']}"] = opts_text
-
-            with col_btn3:
-                if st.button("📊 図解生成", key=f"ai_diag_{q['front']}", use_container_width=True):
-                    with st.spinner("AIが図解を生成中..."):
-                        diagram_code = ai_generate_diagram(q["front"], q["back"])
-                    if diagram_code:
-                        st.session_state[f"ai_diagram_{q['front']}"] = diagram_code
 
         # 6. メモ・参考URL入力欄
         st.divider()
@@ -1452,20 +1396,7 @@ def quiz_mode(data: list[dict]):
             placeholder="調べた内容、参考にしたURLなどを自由に記入してください...",
         )
 
-        # --- キーワードボタン（順序：選択肢4つ → 抽出キーワード2つ） ---
-        all_options = st.session_state.get("quiz_options", [])
-        kw_from_q = extract_keywords(q["front"], n=2)
-        kw_candidates = all_options + kw_from_q
-        if kw_candidates:
-            st.caption("🏷️ タップしてメモ欄に追加:")
-            kw_cols = st.columns(3)
-            for i, kw in enumerate(kw_candidates):
-                with kw_cols[i % 3]:
-                    if st.button(kw, key=f"kw_memo_btn_{i}_{q['front']}", use_container_width=True):
-                        current = st.session_state.get(notes_widget_key, notes_input)
-                        sep = "\n" if current.strip() else ""
-                        st.session_state[kw_pending_key] = current + sep + kw
-                        st.rerun()
+
 
         col_save, col_adopt = st.columns(2)
         with col_save:
@@ -1529,8 +1460,7 @@ def quiz_mode(data: list[dict]):
             # 2. 他の回答の解説の結果
             show_result_with_save_buttons(f"ai_opts_result_{q['front']}", "選択肢の解説", "🔍", "success")
 
-            # 3. 図解の結果
-            show_result_with_save_buttons(f"ai_diagram_{q['front']}", "テキスト図解", "📊")
+
 
             # --- AI自動生成セクション ---
             st.divider()
