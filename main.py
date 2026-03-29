@@ -731,17 +731,18 @@ def save_hidden_to_sheet(front: str):
         return False
 
 
-def _call_gemini(prompt: str, api_key: str) -> str:
+def _call_gemini(prompt: str, api_key: str, max_tokens: int = None) -> str:
     """Gemini REST APIを共通呼び出し関数（検索連携あり・リトライ処理付き）。"""
     url = (
         "https://generativelanguage.googleapis.com/v1beta/"
         f"models/gemini-flash-lite-latest:generateContent?key={api_key}"
     )
+    base_tokens = max_tokens if max_tokens else st.session_state.get("ai_max_tokens", 500)
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "tools": [{"googleSearch": {}}],
         "generationConfig": {
-            "maxOutputTokens": st.session_state.get("ai_max_tokens", 500),
+            "maxOutputTokens": base_tokens + 300,
             "temperature": st.session_state.get("ai_temperature", 0.3),
         }
     }
@@ -793,21 +794,23 @@ def ai_generate_notes(front: str, back: str, custom_prompt: str = "") -> str:
     if not api_key:
         return ""
     try:
+        target_chars = st.session_state.get("ai_max_tokens", 500)
         if custom_prompt.strip():
             prompt = (
                 f"以下のクイズの設問と正解について、次の指示または質問に答えてください：\n"
                 f"指示・質問：{custom_prompt}\n\n"
                 f"設問: {front}\n"
                 f"正解: {back}\n"
+                f"文字数の目安: 【約{target_chars}文字】のボリュームで回答してください。\n"
             )
         else:
             prompt = (
-                f"以下の用語と定義を核としつつ、必要に応じて一般的なビジネス知識や実例を用いて、初心者にも分かりやすく「なぜこの回答なのか」「認識のポイント」「記憶のコツ」を3行程度で簡潔に、かみ砕いて解説してください。\n"
+                f"以下の用語と定義を核としつつ、必要に応じて一般的なビジネス知識や実例を用いて、初心者にも分かりやすく「なぜこの回答なのか」「認識のポイント」「記憶のコツ」を【約{target_chars}文字】のボリュームでかみ砕いて解説してください。\n"
                 f"ただし、解説の内容が元の定義から逸脱しないように注意すること。\n\n"
                 f"用語: {front}\n"
                 f"定義: {back}\n"
             )
-        return _call_gemini(prompt, api_key)
+        return _call_gemini(prompt, api_key, max_tokens=target_chars)
     except Exception as e:
         st.error(f"AI解説の取得に失敗しました: {e}")
         return ""
@@ -820,15 +823,16 @@ def ai_explain_options(front: str, back: str, options: list[str]) -> str:
         return ""
     try:
         options_text = "\n".join([f"-  {opt}" for opt in options])
+        target_chars = st.session_state.get("ai_max_tokens", 500)
         prompt = (
             f"以下のクイズの全選択肢を見て、各選択肢の意味、正解との違いを日本語で解説してください。\n"
-            f"この用語と定義を核としつつ、必要に応じて一般的なビジネス知識や実例を用いて、実務上の違いが分かるように各選択肢に2行程度で説明してください。\n"
+            f"この用語と定義を核としつつ、必要に応じて一般的なビジネス知識や実例を用いて、実務上の違いが分かるように各選択肢を【全体で約{target_chars}文字になるボリュームで】説明してください。\n"
             f"ただし、解説の内容が元の定義から逸脱しないように注意すること。\n\n"
             f"用語: {front}\n"
             f"正解: {back}\n"
             f"選択肢:\n{options_text}\n"
         )
-        return _call_gemini(prompt, api_key)
+        return _call_gemini(prompt, api_key, max_tokens=target_chars)
     except Exception as e:
         st.error(f"他の回答解説の取得に失敗しました: {e}")
         return ""
@@ -888,7 +892,8 @@ def ai_generate_new_quiz(mode: str, question_item: dict, target_sheet_name: str)
     )
 
     try:
-        resp = _call_gemini(prompt, api_key)
+        # クイズ生成は構造化JSONデータなので途切れないように固定で1000を指定
+        resp = _call_gemini(prompt, api_key, max_tokens=1000)
         # Markdownのコードブロックや余計な会話文を取り除き、最初の'{'から最後の'}'までを抽出
         match = re.search(r'\{.*\}', resp, re.DOTALL)
         if match:
