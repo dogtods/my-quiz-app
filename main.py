@@ -739,7 +739,11 @@ def _call_gemini(prompt: str, api_key: str) -> str:
     )
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "tools": [{"googleSearch": {}}]
+        "tools": [{"googleSearch": {}}],
+        "generationConfig": {
+            "maxOutputTokens": st.session_state.get("ai_max_tokens", 500),
+            "temperature": st.session_state.get("ai_temperature", 0.3),
+        }
     }
     
     max_retries = 3
@@ -1935,6 +1939,10 @@ def main():
             )
         
         st.divider()
+        with st.expander("🛠️ AI高度な設定"):
+            st.slider("Temperature", 0.0, 1.0, 0.3, 0.1, key="ai_temperature", help="高いほど創造的、低いほど正確")
+            st.number_input("Max Output Tokens", 100, 2048, 500, 50, key="ai_max_tokens", help="AI回答の最大文字数")
+
         st.caption("設定")
         if st.button("学習履歴をリセット"):
             if JS_EVAL_AVAILABLE:
